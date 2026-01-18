@@ -14,11 +14,13 @@ class PipelineBar:
         on_start: callable,
         on_stop: callable,
         dashboard_url: str | None = None,
+        logfire_url: str | None = None,
     ) -> None:
         self.settings = settings
         self._on_start = on_start
         self._on_stop = on_stop
         self._dashboard_url = dashboard_url
+        self._logfire_url = logfire_url
         self._running = False
         self._checkboxes: dict[str, ui.checkbox] = {}
         self._start_btn: ui.button | None = None
@@ -62,9 +64,22 @@ class PipelineBar:
 
             ui.space()
 
+            # Documentation link
+            ui.link("Docs", "https://fcorrao.github.io/popup-ai/", new_tab=True).classes(
+                "text-primary no-underline hover:underline"
+            )
+            ui.icon("open_in_new", size="xs").classes("text-primary")
+
             # Ray Dashboard link
             if self._dashboard_url:
                 ui.link("Ray Dashboard", self._dashboard_url, new_tab=True).classes(
+                    "text-primary no-underline hover:underline"
+                )
+                ui.icon("open_in_new", size="xs").classes("text-primary")
+
+            # Logfire Dashboard link
+            if self._logfire_url:
+                ui.link("Logfire", self._logfire_url, new_tab=True).classes(
                     "text-primary no-underline hover:underline"
                 )
                 ui.icon("open_in_new", size="xs").classes("text-primary")

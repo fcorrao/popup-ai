@@ -8,11 +8,13 @@ import sqlite3
 import time
 from pathlib import Path
 
+import logfire
 import ray
 from ray.util.queue import Queue
 
 from popup_ai.config import AnnotatorConfig
 from popup_ai.messages import ActorStatus, Annotation, Transcript, UIEvent
+from popup_ai.observability import get_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -72,48 +74,54 @@ class AnnotatorActor:
         if self._state == "running":
             return
 
-        self._logger.info("Starting annotator actor")
-        self._state = "starting"
-        self._error = None
+        with logfire.span("annotator.start"):
+            self._logger.info("Starting annotator actor")
+            self._state = "starting"
+            self._error = None
 
-        try:
-            self._init_cache()
-            await self._init_agent()
-            self._state = "running"
-            self._running = True
-            self._start_time = time.time()
-            self._process_task = asyncio.create_task(self._process_loop())
-            self._publish_ui_event("started", {})
-            self._logger.info("Annotator actor started")
-        except Exception as e:
-            self._state = "error"
-            self._error = str(e)
-            self._logger.exception("Failed to start annotator")
-            self._publish_ui_event("error", {"message": str(e)})
-            raise
+            try:
+                self._init_cache()
+                await self._init_agent()
+                self._state = "running"
+                self._running = True
+                self._start_time = time.time()
+                self._process_task = asyncio.create_task(self._process_loop())
+                self._publish_ui_event("started", {})
+                logfire.info(
+                    "annotator started",
+                    provider=self.config.provider,
+                    model=self.config.model,
+                )
+            except Exception as e:
+                self._state = "error"
+                self._error = str(e)
+                logfire.exception("Failed to start annotator")
+                self._publish_ui_event("error", {"message": str(e)})
+                raise
 
     async def stop(self) -> None:
         """Stop the annotator."""
         if self._state == "stopped":
             return
 
-        self._logger.info("Stopping annotator actor")
-        self._running = False
+        with logfire.span("annotator.stop"):
+            self._logger.info("Stopping annotator actor")
+            self._running = False
 
-        if self._process_task:
-            self._process_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._process_task
+            if self._process_task:
+                self._process_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._process_task
 
-        if self._db_conn:
-            self._db_conn.close()
-            self._db_conn = None
+            if self._db_conn:
+                self._db_conn.close()
+                self._db_conn = None
 
-        self._agent = None
-        self._state = "stopped"
-        self._start_time = None
-        self._publish_ui_event("stopped", {})
-        self._logger.info("Annotator actor stopped")
+            self._agent = None
+            self._state = "stopped"
+            self._start_time = None
+            self._publish_ui_event("stopped", {})
+            logfire.info("annotator stopped")
 
     def health_check(self) -> bool:
         """Check if actor is healthy."""
@@ -206,6 +214,8 @@ class AnnotatorActor:
         cached = self._get_cached(text_hash)
         if cached:
             self._cache_hits += 1
+            if metrics := get_metrics():
+                metrics["llm_cache_hits"].add(1)
             for term, explanation in cached:
                 await self._emit_annotation(term, explanation, cache_hit=True)
             return
@@ -254,7 +264,14 @@ class AnnotatorActor:
 
         try:
             prompt = self.config.prompt_template.format(text=text)
+            start_time = time.time()
             result = await self._agent.run(prompt)
+            latency_ms = (time.time() - start_time) * 1000
+
+            # Record metrics
+            if metrics := get_metrics():
+                metrics["llm_calls"].add(1)
+                metrics["llm_latency"].record(latency_ms)
 
             annotations = []
             for item in result.data:
@@ -262,7 +279,7 @@ class AnnotatorActor:
             return annotations
 
         except Exception:
-            self._logger.exception("LLM call failed")
+            logfire.exception("LLM call failed")
             return []
 
     async def _emit_annotation(

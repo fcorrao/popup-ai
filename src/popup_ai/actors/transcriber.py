@@ -6,6 +6,7 @@ import logging
 import time
 import wave
 
+import logfire
 import ray
 from ray.util.queue import Queue
 
@@ -75,49 +76,55 @@ class TranscriberActor:
         if self._state == "running":
             return
 
-        self._logger.info("Starting transcriber actor")
-        self._state = "starting"
-        self._error = None
+        with logfire.span("transcriber.start"):
+            self._logger.info("Starting transcriber actor")
+            self._state = "starting"
+            self._error = None
 
-        try:
-            await self._load_model()
-            # Load VAD model if enabled
-            if self.config.vad_enabled:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._preprocessor.load_vad_model)
-            self._state = "running"
-            self._running = True
-            self._start_time = time.time()
-            self._process_task = asyncio.create_task(self._process_loop())
-            self._publish_ui_event("started", self._preprocessor.get_stats())
-            self._logger.info("Transcriber actor started")
-        except Exception as e:
-            self._state = "error"
-            self._error = str(e)
-            self._logger.exception("Failed to start transcriber")
-            self._publish_ui_event("error", {"message": str(e)})
-            raise
+            try:
+                await self._load_model()
+                # Load VAD model if enabled
+                if self.config.vad_enabled:
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, self._preprocessor.load_vad_model)
+                self._state = "running"
+                self._running = True
+                self._start_time = time.time()
+                self._process_task = asyncio.create_task(self._process_loop())
+                self._publish_ui_event("started", self._preprocessor.get_stats())
+                logfire.info(
+                    "transcriber started",
+                    model=self.config.model,
+                    vad_enabled=self.config.vad_enabled,
+                )
+            except Exception as e:
+                self._state = "error"
+                self._error = str(e)
+                logfire.exception("Failed to start transcriber")
+                self._publish_ui_event("error", {"message": str(e)})
+                raise
 
     async def stop(self) -> None:
         """Stop the transcriber."""
         if self._state == "stopped":
             return
 
-        self._logger.info("Stopping transcriber actor")
-        self._running = False
+        with logfire.span("transcriber.stop"):
+            self._logger.info("Stopping transcriber actor")
+            self._running = False
 
-        if self._process_task:
-            self._process_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._process_task
+            if self._process_task:
+                self._process_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._process_task
 
-        self._model = None
-        self._audio_buffer.clear()
-        self._buffer_duration_s = 0.0
-        self._state = "stopped"
-        self._start_time = None
-        self._publish_ui_event("stopped", {})
-        self._logger.info("Transcriber actor stopped")
+            self._model = None
+            self._audio_buffer.clear()
+            self._buffer_duration_s = 0.0
+            self._state = "stopped"
+            self._start_time = None
+            self._publish_ui_event("stopped", {})
+            logfire.info("transcriber stopped")
 
     def health_check(self) -> bool:
         """Check if actor is healthy."""

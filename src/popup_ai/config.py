@@ -75,6 +75,25 @@ class OverlayConfig(BaseSettings):
     max_slots: int = Field(default=4, description="Number of overlay slots")
 
 
+class LogfireConfig(BaseSettings):
+    """Configuration for Logfire observability."""
+
+    model_config = SettingsConfigDict(env_prefix="POPUP_LOGFIRE_")
+
+    enabled: bool = Field(default=True, description="Enable Logfire observability")
+    sample_rate: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Trace sampling rate (0.0-1.0). Errors always captured.",
+    )
+    environment: str = Field(default="development", description="Environment name")
+    dashboard_url: str = Field(
+        default="https://logfire-us.pydantic.dev/fcorrao/popup-ai",
+        description="Logfire dashboard URL",
+    )
+
+
 class PipelineConfig(BaseSettings):
     """Configuration for the overall pipeline."""
 
@@ -101,6 +120,7 @@ class Settings(BaseSettings):
     transcriber: TranscriberConfig = Field(default_factory=TranscriberConfig)
     annotator: AnnotatorConfig = Field(default_factory=AnnotatorConfig)
     overlay: OverlayConfig = Field(default_factory=OverlayConfig)
+    logfire: LogfireConfig = Field(default_factory=LogfireConfig)
 
 
 def load_settings() -> Settings:

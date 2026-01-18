@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import time
 
+import logfire
 import ray
 from ray.util.queue import Queue
 
@@ -133,67 +134,73 @@ class AudioIngestActor:
         if self._state == "running":
             return
 
-        self._logger.info("Starting audio ingest actor")
-        self._state = "starting"
-        self._error = None
+        with logfire.span("audio_ingest.start"):
+            self._logger.info("Starting audio ingest actor")
+            self._state = "starting"
+            self._error = None
 
-        # Check ffmpeg availability first
-        if not self._ffmpeg_available:
-            self._state = "error"
-            self._error = self._ffmpeg_version  # Contains the error message
-            self._logger.error(f"Cannot start audio ingest: {self._error}")
-            self._publish_ui_event("error", {
-                "message": self._error,
-                "type": "ffmpeg_not_found",
-            })
-            raise FFmpegNotFoundError(self._error)
+            # Check ffmpeg availability first
+            if not self._ffmpeg_available:
+                self._state = "error"
+                self._error = self._ffmpeg_version  # Contains the error message
+                self._logger.error(f"Cannot start audio ingest: {self._error}")
+                self._publish_ui_event("error", {
+                    "message": self._error,
+                    "type": "ffmpeg_not_found",
+                })
+                raise FFmpegNotFoundError(self._error)
 
-        try:
-            await self._start_ffmpeg()
-            self._state = "running"
-            self._running = True
-            self._start_time = time.time()
-            self._publish_ui_event("started", {"ffmpeg_version": self._ffmpeg_version})
-            self._logger.info("Audio ingest actor started")
-        except Exception as e:
-            self._state = "error"
-            self._error = str(e)
-            self._logger.exception("Failed to start audio ingest")
-            self._publish_ui_event("error", {"message": str(e)})
-            raise
+            try:
+                await self._start_ffmpeg()
+                self._state = "running"
+                self._running = True
+                self._start_time = time.time()
+                self._publish_ui_event("started", {"ffmpeg_version": self._ffmpeg_version})
+                logfire.info(
+                    "audio_ingest started",
+                    srt_port=self.config.srt_port,
+                    sample_rate=self.config.sample_rate,
+                )
+            except Exception as e:
+                self._state = "error"
+                self._error = str(e)
+                logfire.exception("Failed to start audio ingest")
+                self._publish_ui_event("error", {"message": str(e)})
+                raise
 
     async def stop(self) -> None:
         """Stop the audio ingest process."""
         if self._state == "stopped":
             return
 
-        self._logger.info("Stopping audio ingest actor")
-        self._running = False
+        with logfire.span("audio_ingest.stop"):
+            self._logger.info("Stopping audio ingest actor")
+            self._running = False
 
-        # Cancel reader tasks
-        if self._reader_task:
-            self._reader_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._reader_task
+            # Cancel reader tasks
+            if self._reader_task:
+                self._reader_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._reader_task
 
-        if self._stderr_task:
-            self._stderr_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._stderr_task
+            if self._stderr_task:
+                self._stderr_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._stderr_task
 
-        # Terminate ffmpeg
-        if self._process:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-            self._process = None
+            # Terminate ffmpeg
+            if self._process:
+                self._process.terminate()
+                try:
+                    self._process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                self._process = None
 
-        self._state = "stopped"
-        self._start_time = None
-        self._publish_ui_event("stopped", {})
-        self._logger.info("Audio ingest actor stopped")
+            self._state = "stopped"
+            self._start_time = None
+            self._publish_ui_event("stopped", {})
+            logfire.info("audio_ingest stopped")
 
     def health_check(self) -> bool:
         """Check if actor is healthy."""

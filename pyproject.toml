@@ -15,12 +15,13 @@ dependencies = [
     "pydantic-ai>=0.0.30",
     "pydantic-settings>=2.7",
     "pydub>=0.25",
-    "audioop-lts>=0.2.1; python_version >= '3.13'",  # audioop replacement for Python 3.13+
+    "audioop-lts>=0.2.1; python_version >= '3.13'", # audioop replacement for Python 3.13+
     "typer>=0.15",
     "rich>=13.9",
     "ray[default]>=2.40",
     "nicegui>=3.5.0",
     "silero-vad>=5.1",
+    "logfire>=4.19.0",
 ]
 
 [project.optional-dependencies]

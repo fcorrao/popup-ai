@@ -2569,6 +2569,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "audioop-lts" },
+    { name = "logfire" },
     { name = "mlx-whisper" },
     { name = "nicegui" },
     { name = "numpy" },
@@ -2610,6 +2611,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "audioop-lts", marker = "python_full_version >= '3.13'", specifier = ">=0.2.1" },
+    { name = "logfire", specifier = ">=4.19.0" },
     { name = "mlx-whisper", specifier = ">=0.4.3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "nicegui", specifier = ">=3.5.0" },

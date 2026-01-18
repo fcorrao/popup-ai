@@ -26,9 +26,15 @@ logger = logging.getLogger(__name__)
 class PipelineUI:
     """Admin UI for controlling the popup-ai pipeline with tabbed view."""
 
-    def __init__(self, settings: Settings, dashboard_url: str | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        dashboard_url: str | None = None,
+        logfire_url: str | None = None,
+    ) -> None:
         self.settings = settings
         self.dashboard_url = dashboard_url
+        self.logfire_url = logfire_url
         self.supervisor: Any = None
         self.ui_queue: Any = None
         self._status_timer: asyncio.Task | None = None
@@ -63,6 +69,7 @@ class PipelineUI:
                 on_start=self.start_pipeline,
                 on_stop=self.stop_pipeline,
                 dashboard_url=self.dashboard_url,
+                logfire_url=self.logfire_url,
             )
             self._pipeline_bar.build()
 
@@ -230,6 +237,17 @@ class PipelineUI:
 
 def run_app(settings: Settings) -> None:
     """Run the NiceGUI admin app."""
+    # Initialize Logfire observability before Ray
+    logfire_url: str | None = None
+    if settings.logfire.enabled:
+        from popup_ai.observability import configure_logfire
+
+        configure_logfire(
+            sample_rate=settings.logfire.sample_rate,
+            environment=settings.logfire.environment,
+        )
+        logfire_url = settings.logfire.dashboard_url
+
     # Initialize Ray with dashboard and log_to_driver for visibility
     context = ray.init(
         ignore_reinit_error=True,
@@ -243,7 +261,7 @@ def run_app(settings: Settings) -> None:
     if dashboard_url and not dashboard_url.startswith("http"):
         dashboard_url = f"http://{dashboard_url}"
 
-    pipeline_ui = PipelineUI(settings, dashboard_url=dashboard_url)
+    pipeline_ui = PipelineUI(settings, dashboard_url=dashboard_url, logfire_url=logfire_url)
 
     @ui.page("/")
     def index() -> None:

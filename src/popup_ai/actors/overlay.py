@@ -5,6 +5,7 @@ import contextlib
 import logging
 import time
 
+import logfire
 import ray
 from ray.util.queue import Queue
 
@@ -66,55 +67,61 @@ class OverlayActor:
         if self._state == "running":
             return
 
-        self._logger.info("Starting overlay actor")
-        self._state = "starting"
-        self._error = None
+        with logfire.span("overlay.start"):
+            self._logger.info("Starting overlay actor")
+            self._state = "starting"
+            self._error = None
 
-        try:
-            await self._connect_obs()
-            self._state = "running"
-            self._running = True
-            self._start_time = time.time()
-            self._process_task = asyncio.create_task(self._process_loop())
-            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-            self._publish_ui_event("started", {"obs_connected": self._obs_connected})
-            self._logger.info("Overlay actor started")
-        except Exception as e:
-            self._state = "error"
-            self._error = str(e)
-            self._logger.exception("Failed to start overlay")
-            self._publish_ui_event("error", {"message": str(e)})
-            raise
+            try:
+                await self._connect_obs()
+                self._state = "running"
+                self._running = True
+                self._start_time = time.time()
+                self._process_task = asyncio.create_task(self._process_loop())
+                self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+                self._publish_ui_event("started", {"obs_connected": self._obs_connected})
+                logfire.info(
+                    "overlay started",
+                    obs_connected=self._obs_connected,
+                    obs_host=self.config.obs_host,
+                )
+            except Exception as e:
+                self._state = "error"
+                self._error = str(e)
+                logfire.exception("Failed to start overlay")
+                self._publish_ui_event("error", {"message": str(e)})
+                raise
 
     async def stop(self) -> None:
         """Stop the overlay actor."""
         if self._state == "stopped":
             return
 
-        self._logger.info("Stopping overlay actor")
-        self._running = False
+        with logfire.span("overlay.stop"):
+            self._logger.info("Stopping overlay actor")
+            self._running = False
 
-        # Cancel tasks
-        for task in [self._process_task, self._cleanup_task]:
-            if task:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+            # Cancel tasks
+            for task in [self._process_task, self._cleanup_task]:
+                if task:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
 
-        # Clear all slots
-        await self._clear_all_slots()
+            # Clear all slots
+            await self._clear_all_slots()
 
-        # Disconnect OBS
-        if self._obs_client:
-            with contextlib.suppress(Exception):
-                self._obs_client.disconnect()
-            self._obs_client = None
-            self._obs_connected = False
+            # Disconnect OBS
+            if self._obs_client:
+                with contextlib.suppress(Exception):
+                    self._obs_client.disconnect()
+                self._obs_client = None
+                self._obs_connected = False
 
-        self._state = "stopped"
-        self._start_time = None
-        self._publish_ui_event("stopped", {})
-        self._logger.info("Overlay actor stopped")
+            self._state = "stopped"
+            self._start_time = None
+            self._publish_ui_event("stopped", {})
+            logfire.info("overlay stopped")
 
     def health_check(self) -> bool:
         """Check if actor is healthy."""

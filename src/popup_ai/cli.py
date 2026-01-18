@@ -173,6 +173,16 @@ def main(
     if config:
         console.print(f"[dim]Using config: {config}[/dim]")
 
+    # Initialize Logfire observability
+    if settings.logfire.enabled:
+        from popup_ai.observability import configure_logfire
+
+        configure_logfire(
+            sample_rate=settings.logfire.sample_rate,
+            environment=settings.logfire.environment,
+        )
+        console.print(f"[dim]Logfire: {settings.logfire.dashboard_url}[/dim]")
+
     # Initialize Ray with dashboard and log_to_driver
     console.print("[bold blue]Initializing Ray...[/bold blue]")
     context = ray.init(
