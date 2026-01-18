@@ -173,9 +173,21 @@ def main(
     if config:
         console.print(f"[dim]Using config: {config}[/dim]")
 
-    # Initialize Ray
+    # Initialize Ray with dashboard and log_to_driver
     console.print("[bold blue]Initializing Ray...[/bold blue]")
-    ray.init(ignore_reinit_error=True, logging_level=logging.WARNING)
+    context = ray.init(
+        ignore_reinit_error=True,
+        logging_level=logging.INFO,
+        log_to_driver=True,
+        include_dashboard=True,
+    )
+
+    # Show dashboard URL
+    dashboard_url = getattr(context, "dashboard_url", None)
+    if dashboard_url:
+        if not dashboard_url.startswith("http"):
+            dashboard_url = f"http://{dashboard_url}"
+        console.print(f"[dim]Ray Dashboard: {dashboard_url}[/dim]")
 
     if headless:
         # Run pipeline without UI

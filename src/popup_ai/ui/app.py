@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 class PipelineUI:
     """Admin UI for controlling the popup-ai pipeline."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, dashboard_url: str | None = None) -> None:
         self.settings = settings
+        self.dashboard_url = dashboard_url
         self.supervisor: Any = None
         self.ui_queue: Any = None
         self._status_timer: asyncio.Task | None = None
@@ -39,7 +40,14 @@ class PipelineUI:
         with ui.header().classes("bg-primary"):
             ui.label("popup-ai Admin").classes("text-h5")
             ui.space()
-            with ui.row():
+            with ui.row().classes("items-center gap-4"):
+                # Ray Dashboard link
+                if self.dashboard_url:
+                    ui.link("Ray Dashboard", self.dashboard_url, new_tab=True).classes(
+                        "text-white no-underline hover:underline"
+                    )
+                    ui.icon("open_in_new", size="xs").classes("text-white")
+
                 self.start_btn = ui.button("Start Pipeline", on_click=self.start_pipeline)
                 self.start_btn.props("color=positive")
                 self.stop_btn = ui.button("Stop Pipeline", on_click=self.stop_pipeline)
@@ -253,10 +261,20 @@ class PipelineUI:
 
 def run_app(settings: Settings) -> None:
     """Run the NiceGUI admin app."""
-    # Initialize Ray
-    ray.init(ignore_reinit_error=True, logging_level=logging.WARNING)
+    # Initialize Ray with dashboard and log_to_driver for visibility
+    context = ray.init(
+        ignore_reinit_error=True,
+        logging_level=logging.INFO,
+        log_to_driver=True,
+        include_dashboard=True,
+    )
 
-    pipeline_ui = PipelineUI(settings)
+    # Get dashboard URL
+    dashboard_url = context.dashboard_url if hasattr(context, "dashboard_url") else None
+    if dashboard_url and not dashboard_url.startswith("http"):
+        dashboard_url = f"http://{dashboard_url}"
+
+    pipeline_ui = PipelineUI(settings, dashboard_url=dashboard_url)
 
     @ui.page("/")
     def index() -> None:
