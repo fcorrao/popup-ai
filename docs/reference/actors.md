@@ -1,0 +1,288 @@
+# Actors Reference
+
+Technical reference for popup-ai's Ray actors.
+
+## Overview
+
+popup-ai uses [Ray](https://ray.io/) actors as the backbone of its pipeline architecture. Each pipeline stage is an isolated actor that communicates via Ray Queues.
+
+## Actor Hierarchy
+
+```
+PipelineSupervisor
+├── AudioIngestActor
+├── TranscriberActor
+├── AnnotatorActor
+└── OverlayActor
+```
+
+## PipelineSupervisor
+
+**Module:** `popup_ai.actors.supervisor`
+
+The supervisor manages all child actor lifecycles.
+
+### Responsibilities
+
+- Spawn and configure child actors
+- Health monitoring (every 5 seconds)
+- Automatic restart on actor crash
+- Graceful shutdown coordination
+- Queue creation and management
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `start()` | Start all enabled actors |
+| `stop()` | Stop all actors gracefully |
+| `get_status()` | Get status of all actors |
+| `start_actor(name)` | Start a specific actor |
+| `stop_actor(name)` | Stop a specific actor |
+| `restart_actor(name)` | Restart a specific actor |
+| `configure(settings)` | Update configuration |
+
+### Queues Created
+
+| Queue | Capacity | Flow |
+|-------|----------|------|
+| `audio` | 100 | AudioIngest → Transcriber |
+| `transcript` | 100 | Transcriber → Annotator |
+| `annotation` | 100 | Annotator → Overlay |
+| `ui` | 1000 | All actors → UI |
+
+## AudioIngestActor
+
+**Module:** `popup_ai.actors.audio_ingest`
+
+Captures audio from SRT stream via ffmpeg subprocess.
+
+### Configuration
+
+Uses `AudioIngestConfig`:
+
+- `srt_port`: SRT listener port
+- `srt_latency_ms`: SRT latency
+- `sample_rate`: Audio sample rate (Hz)
+- `channels`: Number of channels
+- `chunk_duration_ms`: Chunk size
+
+### Data Flow
+
+```
+SRT Stream → ffmpeg subprocess → PCM data → AudioChunk → audio_queue
+```
+
+### Stats
+
+| Stat | Description |
+|------|-------------|
+| `chunks_sent` | Number of audio chunks sent |
+| `bytes_processed` | Total bytes processed |
+| `uptime_s` | Actor uptime in seconds |
+
+### ffmpeg Command
+
+```bash
+ffmpeg -hide_banner -loglevel warning \
+  -i "srt://0.0.0.0:{port}?mode=listener&latency={latency}" \
+  -vn -acodec pcm_s16le -ar {sample_rate} -ac {channels} \
+  -f s16le pipe:1
+```
+
+## TranscriberActor
+
+**Module:** `popup_ai.actors.transcriber`
+
+Transcribes audio using mlx-whisper.
+
+### Configuration
+
+Uses `TranscriberConfig`:
+
+- `model`: Whisper model identifier
+- `chunk_length_s`: Audio chunk length
+- `overlap_s`: Overlap between chunks
+- `language`: Language code or None
+
+### Data Flow
+
+```
+audio_queue → AudioChunk → buffer → WAV file → mlx-whisper → Transcript → transcript_queue
+```
+
+### Processing Logic
+
+1. Accumulate AudioChunks in buffer
+2. When buffer >= `chunk_length_s`:
+   - Write buffer to temp WAV file
+   - Run mlx-whisper transcription
+   - Keep `overlap_s` of audio for next chunk
+   - Push Transcript to output queue
+
+### Stats
+
+| Stat | Description |
+|------|-------------|
+| `transcripts_sent` | Number of transcripts sent |
+| `audio_seconds_processed` | Total audio processed |
+| `buffer_duration_s` | Current buffer size |
+| `uptime_s` | Actor uptime in seconds |
+
+## AnnotatorActor
+
+**Module:** `popup_ai.actors.annotator`
+
+Extracts terms and generates explanations via LLM.
+
+### Configuration
+
+Uses `AnnotatorConfig`:
+
+- `provider`: LLM provider
+- `model`: LLM model
+- `cache_enabled`: Enable SQLite cache
+- `cache_path`: Cache database path
+- `prompt_template`: Prompt template
+
+### Data Flow
+
+```
+transcript_queue → Transcript → cache check → LLM call → Annotation → annotation_queue
+```
+
+### Cache Schema
+
+```sql
+CREATE TABLE annotations (
+    text_hash TEXT PRIMARY KEY,
+    term TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    created_at REAL NOT NULL
+)
+```
+
+### Stats
+
+| Stat | Description |
+|------|-------------|
+| `annotations_sent` | Number of annotations sent |
+| `cache_hits` | Cache hits |
+| `llm_calls` | LLM API calls made |
+| `uptime_s` | Actor uptime in seconds |
+
+## OverlayActor
+
+**Module:** `popup_ai.actors.overlay`
+
+Sends annotations to OBS via WebSocket.
+
+### Configuration
+
+Uses `OverlayConfig`:
+
+- `obs_host`: OBS WebSocket host
+- `obs_port`: OBS WebSocket port
+- `obs_password`: OBS WebSocket password
+- `scene_name`: Target OBS scene
+- `hold_duration_ms`: Display duration
+- `max_slots`: Number of overlay slots
+
+### Data Flow
+
+```
+annotation_queue → Annotation → slot assignment → OBS WebSocket → text source update
+```
+
+### Slot Management
+
+- 4 slots available (configurable via `max_slots`)
+- Round-robin assignment
+- Auto-hide after `hold_duration_ms`
+- Cleanup loop runs every 500ms
+
+### OBS Sources
+
+Creates text sources named:
+
+- `popup-ai-slot-1`
+- `popup-ai-slot-2`
+- `popup-ai-slot-3`
+- `popup-ai-slot-4`
+
+### Stats
+
+| Stat | Description |
+|------|-------------|
+| `annotations_displayed` | Total annotations shown |
+| `obs_connected` | OBS connection status |
+| `active_slots` | Currently active slots |
+| `uptime_s` | Actor uptime in seconds |
+
+## Message Types
+
+Defined in `popup_ai.messages`:
+
+### AudioChunk
+
+```python
+class AudioChunk(BaseModel):
+    data: bytes           # Raw PCM audio data
+    timestamp_ms: int     # Capture timestamp
+    sample_rate: int      # Sample rate (default: 16000)
+    channels: int         # Channels (default: 1)
+```
+
+### Transcript
+
+```python
+class Transcript(BaseModel):
+    text: str                           # Full transcript text
+    segments: list[TranscriptSegment]   # Word-level segments
+    is_partial: bool                    # Partial vs final
+    timestamp_ms: int                   # Processing timestamp
+```
+
+### Annotation
+
+```python
+class Annotation(BaseModel):
+    term: str                # Extracted term
+    explanation: str         # Brief explanation
+    display_duration_ms: int # Display time (default: 5000)
+    slot: int               # Overlay slot (1-4)
+    timestamp_ms: int       # Generation timestamp
+```
+
+### UIEvent
+
+```python
+class UIEvent(BaseModel):
+    source: str      # Actor name
+    event_type: str  # Event type (started, stopped, error, etc.)
+    data: dict       # Event-specific data
+    timestamp_ms: int
+```
+
+### ActorStatus
+
+```python
+class ActorStatus(BaseModel):
+    name: str           # Actor name
+    state: str          # stopped, starting, running, error
+    error: str | None   # Error message if state is error
+    stats: dict         # Actor-specific statistics
+```
+
+## Health Checks
+
+Each actor implements `health_check() -> bool`:
+
+- Returns `True` if actor is healthy
+- Supervisor checks every 5 seconds
+- Unhealthy actors are automatically restarted
+
+## See Also
+
+- [Architecture](../explanation/architecture.md) - Design overview
+- [Ray Actors](../explanation/ray-actors.md) - Why Ray?
