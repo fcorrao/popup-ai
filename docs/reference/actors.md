@@ -282,6 +282,55 @@ Each actor implements `health_check() -> bool`:
 - Supervisor checks every 5 seconds
 - Unhealthy actors are automatically restarted
 
+## Independent Testability
+
+Each actor is designed to be testable in isolation without requiring the full pipeline:
+
+### Design Principles
+
+- **Queue-based I/O**: Actors only communicate via Ray Queues, not direct method calls
+- **Configuration injection**: All settings passed via config objects
+- **No global state**: Actors are self-contained
+- **Optional dependencies**: External services (OBS, LLM APIs) handled gracefully when unavailable
+
+### Testing an Actor in Isolation
+
+```python
+import ray
+from ray.util.queue import Queue
+from popup_ai.actors.annotator import AnnotatorActor
+from popup_ai.config import AnnotatorConfig
+from popup_ai.messages import Transcript
+
+ray.init()
+
+# Create test queues
+input_queue = Queue()
+output_queue = Queue()
+
+# Create actor with test config
+config = AnnotatorConfig(cache_enabled=False)
+actor = AnnotatorActor.remote(config, input_queue, output_queue)
+
+# Start and inject test data
+await actor.start.remote()
+input_queue.put(Transcript(text="Test transcript", segments=[], is_partial=False, timestamp_ms=0))
+
+# Verify output
+annotation = output_queue.get(timeout=10)
+assert annotation.term is not None
+```
+
+### UI Injection for Testing
+
+The admin UI supports direct injection of test data into actors via the Annotator tab:
+
+1. Start pipeline with only the Annotator actor enabled
+2. Use the "Inject Transcript" feature to send test text
+3. Observe annotations in the Overlay tab or OBS
+
+This allows testing the LLM integration without needing live audio input.
+
 ## See Also
 
 - [Architecture](../explanation/architecture.md) - Design overview

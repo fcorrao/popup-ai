@@ -206,6 +206,38 @@ The annotator caches LLM results in SQLite:
 
 For v1, this is sufficient. Future versions may add Redis for distributed caching.
 
+## Observability
+
+popup-ai integrates [Logfire](https://logfire.pydantic.dev/) for observability, providing traces, metrics, and error tracking.
+
+### What Gets Traced
+
+| Component | Traces |
+|-----------|--------|
+| pydantic-ai | Automatic LLM call tracing (prompts, responses, latency) |
+| Actor lifecycle | Start/stop spans for all actors |
+| Errors | All exceptions with full context |
+
+### Custom Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `popup_ai.llm_calls` | Counter | Total LLM API calls |
+| `popup_ai.llm_cache_hits` | Counter | Cache hits (avoided LLM calls) |
+| `popup_ai.llm_latency_ms` | Histogram | LLM response latency |
+
+### Quota-Conscious Design
+
+The default 50% head sampling keeps quota usage reasonable while capturing enough data for debugging. Errors are always captured regardless of sampling rate.
+
+### Dashboard Links
+
+The admin UI provides direct links to:
+
+- **Docs** - Project documentation
+- **Ray Dashboard** - Actor status, resource usage, logs
+- **Logfire** - Traces, metrics, error tracking
+
 ## Failure Modes
 
 ### Actor Crash

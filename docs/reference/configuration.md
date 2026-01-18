@@ -114,6 +114,45 @@ Settings for the OBS WebSocket overlay actor.
 4. Set a password if desired
 5. Configure popup-ai with matching settings
 
+### LogfireConfig
+
+Settings for [Logfire](https://logfire.pydantic.dev/) observability integration.
+
+| Setting | Env Var | Type | Default | Description |
+|---------|---------|------|---------|-------------|
+| `enabled` | `POPUP_LOGFIRE_ENABLED` | bool | `true` | Enable Logfire observability |
+| `sample_rate` | `POPUP_LOGFIRE_SAMPLE_RATE` | float | `0.5` | Trace sampling rate (0.0-1.0) |
+| `environment` | `POPUP_LOGFIRE_ENVIRONMENT` | str | `development` | Environment name for traces |
+| `dashboard_url` | `POPUP_LOGFIRE_DASHBOARD_URL` | str | (see below) | Logfire dashboard URL |
+
+#### Default Dashboard URL
+
+```
+https://logfire-us.pydantic.dev/fcorrao/popup-ai
+```
+
+#### What Gets Traced
+
+- **pydantic-ai agent runs** - Automatic LLM call tracing via `instrument_pydantic_ai()`
+- **Actor lifecycle events** - Start/stop spans for all actors
+- **Errors and exceptions** - Always captured regardless of sampling rate
+- **Custom metrics** - `popup_ai.llm_calls`, `popup_ai.llm_cache_hits`, `popup_ai.llm_latency_ms`
+
+#### Sampling Strategy
+
+The default 50% head sampling balances observability with quota usage. Logfire automatically escalates errors to 100% capture regardless of sampling rate.
+
+```bash
+# Disable observability entirely
+export POPUP_LOGFIRE_ENABLED=false
+
+# Full tracing for debugging
+export POPUP_LOGFIRE_SAMPLE_RATE=1.0
+
+# Minimal tracing for production
+export POPUP_LOGFIRE_SAMPLE_RATE=0.1
+```
+
 ## Example Configurations
 
 ### Development Setup
