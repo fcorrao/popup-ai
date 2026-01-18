@@ -186,15 +186,24 @@ class OverlayActor:
 
     async def _process_loop(self) -> None:
         """Main processing loop."""
+        loop = asyncio.get_event_loop()
         while self._running:
             try:
-                # Get annotation from queue with timeout
+                # Get annotation from queue with timeout (in executor to avoid blocking)
                 try:
-                    annotation = self.input_queue.get(block=True, timeout=0.5)
+                    annotation = await loop.run_in_executor(
+                        None, lambda: self.input_queue.get(block=True, timeout=0.5)
+                    )
                 except Exception:
                     continue
 
                 if isinstance(annotation, Annotation):
+                    # Publish annotation_received event for UI
+                    self._publish_ui_event("annotation_received", {
+                        "term": annotation.term,
+                        "explanation": annotation.explanation,
+                        "slot": annotation.slot,
+                    })
                     await self._display_annotation(annotation)
 
             except asyncio.CancelledError:

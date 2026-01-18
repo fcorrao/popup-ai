@@ -23,7 +23,7 @@ class FFmpegNotFoundError(Exception):
 
 
 def check_ffmpeg_available() -> tuple[bool, str]:
-    """Check if ffmpeg is available and return version info.
+    """Check if ffmpeg is available with SRT protocol support.
 
     Returns:
         Tuple of (is_available, version_or_error_message)
@@ -38,14 +38,31 @@ def check_ffmpeg_available() -> tuple[bool, str]:
         )
 
     try:
+        # Check version
         result = subprocess.run(
             ["ffmpeg", "-version"],
             capture_output=True,
             text=True,
             timeout=5,
         )
-        # Extract first line (version info)
         version_line = result.stdout.split("\n")[0] if result.stdout else "unknown version"
+
+        # Check for SRT protocol support
+        protocols_result = subprocess.run(
+            ["ffmpeg", "-protocols"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if "srt" not in protocols_result.stdout.lower():
+            return False, (
+                f"ffmpeg found ({version_line}) but SRT protocol not supported.\n"
+                "Reinstall ffmpeg with SRT support:\n"
+                "  macOS: brew reinstall ffmpeg\n"
+                "  Ubuntu: sudo apt install ffmpeg libsrt-dev\n"
+                "  Or build from source with --enable-libsrt"
+            )
+
         return True, version_line
     except subprocess.TimeoutExpired:
         return False, "ffmpeg found but timed out checking version"
@@ -278,6 +295,12 @@ class AudioIngestActor:
                     self.output_queue.put_nowait(chunk)
                     self._chunks_sent += 1
                     self._bytes_processed += len(data)
+                    # Publish chunk_produced event for UI
+                    self._publish_ui_event("chunk_produced", {
+                        "bytes": len(data),
+                        "chunk_num": self._chunks_sent,
+                        "total_bytes": self._bytes_processed,
+                    })
                 except Exception:
                     self._logger.debug("Output queue full, dropping chunk")
 

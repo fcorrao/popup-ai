@@ -1,4 +1,4 @@
-"""NiceGUI admin application."""
+"""NiceGUI admin application with tabbed pipeline view."""
 
 import asyncio
 import contextlib
@@ -10,12 +10,21 @@ from nicegui import app, ui
 
 from popup_ai.config import Settings
 from popup_ai.messages import ActorStatus, UIEvent
+from popup_ai.ui.components.pipeline_bar import PipelineBar
+from popup_ai.ui.state import UIState
+from popup_ai.ui.tabs import (
+    AnnotatorTab,
+    AudioIngestTab,
+    OverlayTab,
+    OverviewTab,
+    TranscriberTab,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class PipelineUI:
-    """Admin UI for controlling the popup-ai pipeline."""
+    """Admin UI for controlling the popup-ai pipeline with tabbed view."""
 
     def __init__(self, settings: Settings, dashboard_url: str | None = None) -> None:
         self.settings = settings
@@ -24,9 +33,14 @@ class PipelineUI:
         self.ui_queue: Any = None
         self._status_timer: asyncio.Task | None = None
         self._event_timer: asyncio.Task | None = None
-        self._actor_statuses: dict[str, ActorStatus] = {}
-        self._transcripts: list[str] = []
-        self._annotations: list[dict] = []
+
+        # UI state management
+        self._state = UIState()
+
+        # Tab instances
+        self._tabs: dict[str, Any] = {}
+        self._pipeline_bar: PipelineBar | None = None
+        self._tab_panels: ui.tab_panels | None = None
 
     async def init_supervisor(self) -> None:
         """Initialize the pipeline supervisor."""
@@ -36,153 +50,84 @@ class PipelineUI:
         self.ui_queue = ray.get(self.supervisor.get_ui_queue.remote())
 
     def build_ui(self) -> None:
-        """Build the admin UI."""
+        """Build the admin UI with tabs."""
+        # Header
         with ui.header().classes("bg-primary"):
             ui.label("popup-ai Admin").classes("text-h5")
-            ui.space()
-            with ui.row().classes("items-center gap-4"):
-                # Ray Dashboard link
-                if self.dashboard_url:
-                    ui.link("Ray Dashboard", self.dashboard_url, new_tab=True).classes(
-                        "text-white no-underline hover:underline"
+
+        # Main content
+        with ui.column().classes("w-full p-4 gap-4"):
+            # Pipeline control bar
+            self._pipeline_bar = PipelineBar(
+                settings=self.settings,
+                on_start=self.start_pipeline,
+                on_stop=self.stop_pipeline,
+                dashboard_url=self.dashboard_url,
+            )
+            self._pipeline_bar.build()
+
+            # Tab navigation
+            with ui.tabs().classes("w-full") as tabs:
+                ui.tab("overview", label="Overview", icon="dashboard")
+                ui.tab("audio_ingest", label="Audio Ingest", icon="mic")
+                ui.tab("transcriber", label="Transcriber", icon="record_voice_over")
+                ui.tab("annotator", label="Annotator", icon="auto_awesome")
+                ui.tab("overlay", label="Overlay", icon="tv")
+
+            # Tab panels
+            self._tab_panels = ui.tab_panels(tabs, value="overview").classes("w-full")
+            with self._tab_panels:
+                with ui.tab_panel("overview"):
+                    self._tabs["overview"] = OverviewTab(self._state)
+                    self._tabs["overview"].build()
+
+                with ui.tab_panel("audio_ingest"):
+                    self._tabs["audio_ingest"] = AudioIngestTab(
+                        self._state, self.settings
                     )
-                    ui.icon("open_in_new", size="xs").classes("text-white")
+                    self._tabs["audio_ingest"].build()
 
-                self.start_btn = ui.button("Start Pipeline", on_click=self.start_pipeline)
-                self.start_btn.props("color=positive")
-                self.stop_btn = ui.button("Stop Pipeline", on_click=self.stop_pipeline)
-                self.stop_btn.props("color=negative")
-                self.stop_btn.set_enabled(False)
-
-        with ui.row().classes("w-full gap-4 p-4"):
-            # Left column: Actor status
-            with ui.column().classes("w-1/3"):
-                ui.label("Actor Status").classes("text-h6")
-                self.status_container = ui.column().classes("w-full gap-2")
-                self._update_status_display()
-
-            # Middle column: Live transcript
-            with ui.column().classes("w-1/3"):
-                ui.label("Live Transcript").classes("text-h6")
-                self.transcript_log = ui.log(max_lines=50).classes("w-full h-64")
-
-            # Right column: Annotations
-            with ui.column().classes("w-1/3"):
-                ui.label("Recent Annotations").classes("text-h6")
-                self.annotation_container = ui.column().classes("w-full gap-2")
-
-        # Settings panel
-        with ui.expansion("Settings", icon="settings").classes("w-full"):  # noqa: SIM117
-            with ui.grid(columns=2).classes("w-full gap-4 p-4"):
-                # Audio settings
-                with ui.card().classes("w-full"):
-                    ui.label("Audio Ingest").classes("text-subtitle1")
-                    ui.number(
-                        "SRT Port",
-                        value=self.settings.audio.srt_port,
-                        on_change=lambda e: setattr(self.settings.audio, "srt_port", int(e.value)),
+                with ui.tab_panel("transcriber"):
+                    self._tabs["transcriber"] = TranscriberTab(
+                        self._state, self.settings
                     )
-                    ui.number(
-                        "Latency (ms)",
-                        value=self.settings.audio.srt_latency_ms,
-                        on_change=lambda e: setattr(
-                            self.settings.audio, "srt_latency_ms", int(e.value)
-                        ),
-                    )
+                    self._tabs["transcriber"].build()
 
-                # Transcriber settings
-                with ui.card().classes("w-full"):
-                    ui.label("Transcriber").classes("text-subtitle1")
-                    ui.input(
-                        "Model",
-                        value=self.settings.transcriber.model,
-                        on_change=lambda e: setattr(self.settings.transcriber, "model", e.value),
-                    )
+                with ui.tab_panel("annotator"):
+                    self._tabs["annotator"] = AnnotatorTab(self._state, self.settings)
+                    self._tabs["annotator"].build()
 
-                # Annotator settings
-                with ui.card().classes("w-full"):
-                    ui.label("Annotator").classes("text-subtitle1")
-                    ui.input(
-                        "Provider",
-                        value=self.settings.annotator.provider,
-                        on_change=lambda e: setattr(self.settings.annotator, "provider", e.value),
-                    )
-                    ui.input(
-                        "Model",
-                        value=self.settings.annotator.model,
-                        on_change=lambda e: setattr(self.settings.annotator, "model", e.value),
-                    )
-
-                # Overlay settings
-                with ui.card().classes("w-full"):
-                    ui.label("OBS Overlay").classes("text-subtitle1")
-                    ui.input(
-                        "Host",
-                        value=self.settings.overlay.obs_host,
-                        on_change=lambda e: setattr(self.settings.overlay, "obs_host", e.value),
-                    )
-                    ui.number(
-                        "Port",
-                        value=self.settings.overlay.obs_port,
-                        on_change=lambda e: setattr(
-                            self.settings.overlay, "obs_port", int(e.value)
-                        ),
-                    )
-
-    def _update_status_display(self) -> None:
-        """Update the actor status display."""
-        self.status_container.clear()
-        with self.status_container:
-            actors = ["audio_ingest", "transcriber", "annotator", "overlay"]
-            for actor_name in actors:
-                status = self._actor_statuses.get(actor_name)
-                with ui.card().classes("w-full"):
-                    with ui.row().classes("items-center"):
-                        if status:
-                            state = status.state
-                            if state == "running":
-                                ui.icon("check_circle", color="green")
-                            elif state == "error":
-                                ui.icon("error", color="red")
-                            elif state == "starting":
-                                ui.icon("pending", color="orange")
-                            else:
-                                ui.icon("circle", color="grey")
-                        else:
-                            ui.icon("circle", color="grey")
-                        ui.label(actor_name.replace("_", " ").title())
-
-                    if status and status.stats:
-                        with ui.row().classes("text-caption"):
-                            for key, value in list(status.stats.items())[:3]:
-                                ui.label(f"{key}: {value}")
+                with ui.tab_panel("overlay"):
+                    self._tabs["overlay"] = OverlayTab(self._state, self.settings)
+                    self._tabs["overlay"].build()
 
     async def start_pipeline(self) -> None:
         """Start the pipeline."""
         ui.notify("Starting pipeline...", type="info")
-        self.start_btn.set_enabled(False)
 
         try:
             if self.supervisor is None:
                 await self.init_supervisor()
 
             await self.supervisor.start.remote()
-            self.stop_btn.set_enabled(True)
+            self._state.pipeline_running = True
+            if self._pipeline_bar:
+                self._pipeline_bar.set_running(True)
             ui.notify("Pipeline started", type="positive")
 
-            # Start status polling
+            # Start polling tasks
             self._status_timer = asyncio.create_task(self._poll_status())
             self._event_timer = asyncio.create_task(self._poll_events())
 
         except Exception as e:
             logger.exception("Failed to start pipeline")
             ui.notify(f"Failed to start: {e}", type="negative")
-            self.start_btn.set_enabled(True)
+            if self._pipeline_bar:
+                self._pipeline_bar.set_running(False)
 
     async def stop_pipeline(self) -> None:
         """Stop the pipeline."""
         ui.notify("Stopping pipeline...", type="info")
-        self.stop_btn.set_enabled(False)
 
         try:
             if self.supervisor:
@@ -194,24 +139,24 @@ class PipelineUI:
             if self._event_timer:
                 self._event_timer.cancel()
 
-            self._actor_statuses.clear()
-            self._update_status_display()
-            self.start_btn.set_enabled(True)
+            self._state.pipeline_running = False
+            self._state.clear()
+            if self._pipeline_bar:
+                self._pipeline_bar.set_running(False)
             ui.notify("Pipeline stopped", type="positive")
 
         except Exception as e:
             logger.exception("Failed to stop pipeline")
             ui.notify(f"Failed to stop: {e}", type="negative")
-            self.stop_btn.set_enabled(True)
 
     async def _poll_status(self) -> None:
         """Poll actor status periodically."""
         while True:
             try:
                 if self.supervisor:
-                    statuses = ray.get(self.supervisor.get_status.remote())
-                    self._actor_statuses = statuses
-                    self._update_status_display()
+                    statuses = await self.supervisor.get_status.remote()
+                    self._state.update_statuses(statuses)
+                    self._update_tabs(statuses)
             except Exception as e:
                 logger.debug(f"Status poll failed: {e}")
 
@@ -236,27 +181,39 @@ class PipelineUI:
 
     def _handle_event(self, event: UIEvent) -> None:
         """Handle a UI event from an actor."""
-        if event.source == "transcriber" and event.event_type == "transcript":
-            text = event.data.get("text", "")
-            if text:
-                self.transcript_log.push(text)
-                self._transcripts.append(text)
+        # Route to state manager
+        self._state.handle_event(event)
 
-        elif event.source == "annotator" and event.event_type == "annotation":
-            term = event.data.get("term", "")
-            explanation = event.data.get("explanation", "")
-            if term:
-                self._annotations.append({"term": term, "explanation": explanation})
-                self._update_annotations_display()
+        # Route to appropriate tab
+        event_to_tab = {
+            "chunk_produced": "audio_ingest",
+            "audio_received": "transcriber",
+            "transcript": "transcriber",
+            "transcript_received": "annotator",
+            "annotation": "annotator",
+            "annotation_received": "overlay",
+            "display": "overlay",
+            "clear": "overlay",
+        }
 
-    def _update_annotations_display(self) -> None:
-        """Update the annotations display."""
-        self.annotation_container.clear()
-        with self.annotation_container:
-            for ann in self._annotations[-10:]:  # Show last 10
-                with ui.card().classes("w-full"):
-                    ui.label(ann["term"]).classes("font-bold")
-                    ui.label(ann["explanation"]).classes("text-caption")
+        tab_name = event_to_tab.get(event.event_type)
+        if tab_name and tab_name in self._tabs:
+            tab = self._tabs[tab_name]
+            if hasattr(tab, "handle_event"):
+                tab.handle_event(event)
+
+    def _update_tabs(self, statuses: dict[str, ActorStatus]) -> None:
+        """Update all tabs with new status data."""
+        # Update overview tab
+        if "overview" in self._tabs:
+            self._tabs["overview"].update(statuses)
+
+        # Update individual tabs
+        for tab_name in ["audio_ingest", "transcriber", "annotator", "overlay"]:
+            if tab_name in self._tabs:
+                tab = self._tabs[tab_name]
+                if hasattr(tab, "update"):
+                    tab.update()
 
 
 def run_app(settings: Settings) -> None:

@@ -199,12 +199,12 @@ class PipelineSupervisor:
                 except Exception:
                     self._logger.exception(f"Health check failed for {name}")
 
-    def get_status(self) -> dict[str, ActorStatus]:
+    async def get_status(self) -> dict[str, ActorStatus]:
         """Get status of all actors."""
         statuses = {}
         for name, actor in self._actors.items():
             try:
-                status = ray.get(actor.get_status.remote(), timeout=2)
+                status = await actor.get_status.remote()
                 statuses[name] = status
             except Exception:
                 statuses[name] = ActorStatus(

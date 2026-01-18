@@ -163,14 +163,22 @@ class AnnotatorActor:
         except ImportError:
             self._logger.warning("pydantic-ai not installed, annotator will use mock mode")
             self._agent = None
+        except Exception as e:
+            # Handle missing API keys, invalid config, etc.
+            self._logger.warning(f"Failed to initialize LLM agent: {e}")
+            self._logger.warning("Annotator will run in mock mode (no LLM calls)")
+            self._agent = None
 
     async def _process_loop(self) -> None:
         """Main processing loop."""
+        loop = asyncio.get_event_loop()
         while self._running:
             try:
-                # Get transcript from queue with timeout
+                # Get transcript from queue with timeout (in executor to avoid blocking)
                 try:
-                    transcript = self.input_queue.get(block=True, timeout=0.5)
+                    transcript = await loop.run_in_executor(
+                        None, lambda: self.input_queue.get(block=True, timeout=0.5)
+                    )
                 except Exception:
                     continue
 
@@ -188,12 +196,18 @@ class AnnotatorActor:
         text = transcript.text.strip()
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
 
+        # Publish transcript_received event for UI
+        self._publish_ui_event("transcript_received", {
+            "text": text[:100],
+            "text_hash": text_hash,
+        })
+
         # Check cache first
         cached = self._get_cached(text_hash)
         if cached:
             self._cache_hits += 1
             for term, explanation in cached:
-                await self._emit_annotation(term, explanation)
+                await self._emit_annotation(term, explanation, cache_hit=True)
             return
 
         # Call LLM
@@ -203,7 +217,7 @@ class AnnotatorActor:
         # Cache and emit results
         for term, explanation in annotations:
             self._cache_annotation(text_hash, term, explanation)
-            await self._emit_annotation(term, explanation)
+            await self._emit_annotation(term, explanation, cache_hit=False)
 
     def _get_cached(self, text_hash: str) -> list[tuple[str, str]] | None:
         """Get cached annotations for text hash."""
@@ -251,7 +265,9 @@ class AnnotatorActor:
             self._logger.exception("LLM call failed")
             return []
 
-    async def _emit_annotation(self, term: str, explanation: str) -> None:
+    async def _emit_annotation(
+        self, term: str, explanation: str, cache_hit: bool = False
+    ) -> None:
         """Emit an annotation to the output queue."""
         self._slot_counter = (self._slot_counter % 4) + 1
 
@@ -269,6 +285,8 @@ class AnnotatorActor:
             self._publish_ui_event("annotation", {
                 "term": term,
                 "explanation": explanation,
+                "cache_hit": cache_hit,
+                "slot": self._slot_counter,
             })
         except Exception:
             self._logger.debug("Output queue full, dropping annotation")

@@ -4,6 +4,17 @@ How-to guides are **task-oriented** recipes that guide you through the steps to 
 
 ## Available Guides
 
+### [Install ffmpeg with SRT Support](install-ffmpeg.md)
+
+Install ffmpeg with the required SRT protocol support for audio streaming.
+
+**You'll learn how to:**
+
+- Install ffmpeg from homebrew-ffmpeg tap
+- Verify SRT support is enabled
+- Choose optional build flags
+- Troubleshoot build issues
+
 ### [Configure OBS for SRT Streaming](configure-obs.md)
 
 Set up OBS Studio to stream audio to popup-ai via SRT protocol.
@@ -40,6 +51,7 @@ Run only the pipeline stages you need for specific workflows.
 
 | Task | Guide |
 |------|-------|
+| Install ffmpeg with SRT | [Install ffmpeg](install-ffmpeg.md) |
 | Connect OBS to popup-ai | [Configure OBS](configure-obs.md) |
 | Improve transcription accuracy | [Tune Transcription](tune-transcription.md) |
 | Run without OBS overlay | [Pipeline Subsets](pipeline-subsets.md) |

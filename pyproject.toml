@@ -9,25 +9,26 @@ authors = [{ name = "Frank Corrao", email = "fcorrao@gmail.com" }]
 
 dependencies = [
     "mlx-whisper>=0.4.3",
+    "numpy>=1.26",
+    "obsws-python>=1.7",
     "pydantic>=2.10",
+    "pydantic-ai>=0.0.30",
     "pydantic-settings>=2.7",
     "typer>=0.15",
     "rich>=13.9",
-    "ray>=2.40",
+    "ray[default]>=2.40",
     "nicegui>=3.5.0",
+    "silero-vad>=5.1",
 ]
 
 [project.optional-dependencies]
-ui = ["nicegui>=2.9"]
-obs = ["obsws-python>=1.7"]
-llm = ["pydantic-ai>=0.0.30"]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "ruff>=0.9",
     "mypy>=1.14",
 ]
-all = ["popup-ai[ui,obs,llm,dev]"]
+all = ["popup-ai[dev]"]
 
 [project.scripts]
 popup-ai = "popup_ai.cli:app"

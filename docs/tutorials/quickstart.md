@@ -9,8 +9,38 @@ Before you begin, make sure you have:
 - [x] macOS with Apple Silicon (M1/M2/M3)
 - [x] Python 3.13+ (`python3 --version`)
 - [x] OBS Studio installed
-- [x] ffmpeg installed (`brew install ffmpeg`)
+- [x] ffmpeg with SRT support (see below)
 - [x] An OpenAI API key (for annotations)
+
+### Installing ffmpeg with SRT Support
+
+The standard Homebrew ffmpeg does **not** include SRT protocol support. You need to install from the `homebrew-ffmpeg` tap:
+
+```bash
+# Add the tap
+brew tap homebrew-ffmpeg/ffmpeg
+
+# Install ffmpeg with SRT support
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
+```
+
+If you already have ffmpeg installed, unlink it first:
+
+```bash
+brew unlink ffmpeg
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-srt
+```
+
+Verify SRT support is enabled:
+
+```bash
+ffmpeg -protocols 2>&1 | grep srt
+```
+
+You should see `srt` in the output.
+
+!!! warning "SRT Required"
+    Without SRT support, the audio pipeline cannot receive streams from OBS. See [Installing ffmpeg](../how-to/install-ffmpeg.md) for detailed instructions.
 
 ## Step 1: Install popup-ai
 

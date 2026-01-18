@@ -9,6 +9,7 @@ import wave
 import ray
 from ray.util.queue import Queue
 
+from popup_ai.audio.preprocessor import AudioPreprocessor
 from popup_ai.config import TranscriberConfig
 from popup_ai.messages import ActorStatus, AudioChunk, Transcript, TranscriptSegment, UIEvent
 
@@ -42,9 +43,12 @@ class TranscriberActor:
         self._transcripts_sent = 0
         self._audio_seconds_processed = 0.0
         self._model = None
+        self._preprocessor = AudioPreprocessor(config)
         self._audio_buffer: list[bytes] = []
         self._buffer_duration_s = 0.0
         self._last_sample_rate = 16000
+        self._chunks_with_speech = 0
+        self._chunks_without_speech = 0
         self._logger = logging.getLogger("popup_ai.actors.transcriber")
 
     def get_status(self) -> ActorStatus:
@@ -53,7 +57,10 @@ class TranscriberActor:
             "transcripts_sent": self._transcripts_sent,
             "audio_seconds_processed": round(self._audio_seconds_processed, 2),
             "buffer_duration_s": round(self._buffer_duration_s, 2),
+            "chunks_with_speech": self._chunks_with_speech,
+            "chunks_without_speech": self._chunks_without_speech,
         }
+        stats.update(self._preprocessor.get_stats())
         if self._start_time:
             stats["uptime_s"] = time.time() - self._start_time
         return ActorStatus(
@@ -74,11 +81,15 @@ class TranscriberActor:
 
         try:
             await self._load_model()
+            # Load VAD model if enabled
+            if self.config.vad_enabled:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._preprocessor.load_vad_model)
             self._state = "running"
             self._running = True
             self._start_time = time.time()
             self._process_task = asyncio.create_task(self._process_loop())
-            self._publish_ui_event("started", {})
+            self._publish_ui_event("started", self._preprocessor.get_stats())
             self._logger.info("Transcriber actor started")
         except Exception as e:
             self._state = "error"
@@ -126,11 +137,14 @@ class TranscriberActor:
 
     async def _process_loop(self) -> None:
         """Main processing loop."""
+        loop = asyncio.get_event_loop()
         while self._running:
             try:
-                # Get audio chunk from queue with timeout
+                # Get audio chunk from queue with timeout (in executor to avoid blocking)
                 try:
-                    chunk = self.input_queue.get(block=True, timeout=0.5)
+                    chunk = await loop.run_in_executor(
+                        None, lambda: self.input_queue.get(block=True, timeout=0.5)
+                    )
                 except Exception:
                     # Timeout or empty queue
                     # Process buffer if we have enough audio
@@ -158,6 +172,12 @@ class TranscriberActor:
         # Calculate duration: bytes / (sample_rate * channels * bytes_per_sample)
         duration_s = len(chunk.data) / (chunk.sample_rate * chunk.channels * 2)
         self._buffer_duration_s += duration_s
+        # Publish audio_received event for UI
+        self._publish_ui_event("audio_received", {
+            "bytes": len(chunk.data),
+            "duration_s": round(duration_s, 3),
+            "buffer_duration_s": round(self._buffer_duration_s, 2),
+        })
 
     async def _process_buffer(self) -> None:
         """Process accumulated audio buffer."""
@@ -179,8 +199,24 @@ class TranscriberActor:
             self._audio_buffer.clear()
             self._buffer_duration_s = 0.0
 
-        # Transcribe in executor to avoid blocking
+        # Preprocess audio (VAD, normalization, silence trimming)
         loop = asyncio.get_event_loop()
+        preprocess_result = await loop.run_in_executor(
+            None,
+            lambda: self._preprocessor.process(audio_data, self._last_sample_rate),
+        )
+
+        # Track speech detection stats
+        if preprocess_result.has_speech:
+            self._chunks_with_speech += 1
+        else:
+            self._chunks_without_speech += 1
+            # Skip transcription if no speech detected
+            self._logger.debug("No speech detected, skipping transcription")
+            return
+
+        # Use preprocessed audio
+        processed_audio = preprocess_result.audio_data
 
         def transcribe():
             import os
@@ -193,7 +229,7 @@ class TranscriberActor:
                     wav.setnchannels(1)
                     wav.setsampwidth(2)
                     wav.setframerate(self._last_sample_rate)
-                    wav.writeframes(audio_data)
+                    wav.writeframes(processed_audio)
 
             try:
                 result = self._model.transcribe(

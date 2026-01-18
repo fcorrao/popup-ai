@@ -26,10 +26,25 @@ class TranscriberConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="POPUP_TRANSCRIBER_")
 
+    # Model settings
     model: str = Field(default="mlx-community/whisper-base-mlx", description="Whisper model")
     chunk_length_s: float = Field(default=5.0, description="Audio chunk length for processing")
     overlap_s: float = Field(default=0.5, description="Overlap between chunks")
     language: str | None = Field(default=None, description="Language code or None for auto")
+
+    # Audio preprocessing - VAD (Voice Activity Detection)
+    vad_enabled: bool = Field(default=False, description="Enable Silero VAD preprocessing")
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="VAD speech threshold")
+    vad_min_speech_ms: int = Field(default=250, description="Minimum speech duration in ms")
+    vad_min_silence_ms: int = Field(default=100, description="Minimum silence duration in ms")
+
+    # Audio preprocessing - Silence trimming
+    silence_trim_enabled: bool = Field(default=False, description="Trim silence from chunks")
+    silence_threshold_db: float = Field(default=-40.0, description="Silence threshold in dB")
+    silence_buffer_ms: int = Field(default=100, description="Buffer around speech in ms")
+
+    # Audio preprocessing - Normalization
+    normalize_enabled: bool = Field(default=True, description="Enable volume normalization")
 
 
 class AnnotatorConfig(BaseSettings):

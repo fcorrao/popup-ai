@@ -74,6 +74,7 @@ nav:
     - Understanding the Admin UI: tutorials/admin-ui.md
   - How-to Guides:
     - how-to/index.md
+    - Install ffmpeg with SRT: how-to/install-ffmpeg.md
     - Configure OBS for SRT: how-to/configure-obs.md
     - Tune Transcription: how-to/tune-transcription.md
     - Run Pipeline Subsets: how-to/pipeline-subsets.md

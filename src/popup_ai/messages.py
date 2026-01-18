@@ -3,7 +3,7 @@
 Defines Pydantic models for data flowing between pipeline actors via Ray Queues.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TranscriptSegment(BaseModel):
@@ -21,13 +21,12 @@ class AudioChunk(BaseModel):
     Flows: AudioIngestActor → TranscriberActor
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     data: bytes
     timestamp_ms: int
     sample_rate: int = 16000
     channels: int = 1
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class Transcript(BaseModel):
