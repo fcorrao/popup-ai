@@ -33,7 +33,7 @@ class TranscriberConfig(BaseSettings):
     language: str | None = Field(default=None, description="Language code or None for auto")
 
     # Audio preprocessing - VAD (Voice Activity Detection)
-    vad_enabled: bool = Field(default=False, description="Enable Silero VAD preprocessing")
+    vad_enabled: bool = Field(default=True, description="Enable Silero VAD preprocessing")
     vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="VAD speech threshold")
     vad_min_speech_ms: int = Field(default=250, description="Minimum speech duration in ms")
     vad_min_silence_ms: int = Field(default=100, description="Minimum silence duration in ms")
