@@ -83,22 +83,34 @@ class PipelineUI:
 
                 with ui.tab_panel("audio_ingest"):
                     self._tabs["audio_ingest"] = AudioIngestTab(
-                        self._state, self.settings
+                        self._state,
+                        self.settings,
+                        supervisor_getter=lambda: self.supervisor,
                     )
                     self._tabs["audio_ingest"].build()
 
                 with ui.tab_panel("transcriber"):
                     self._tabs["transcriber"] = TranscriberTab(
-                        self._state, self.settings
+                        self._state,
+                        self.settings,
+                        supervisor_getter=lambda: self.supervisor,
                     )
                     self._tabs["transcriber"].build()
 
                 with ui.tab_panel("annotator"):
-                    self._tabs["annotator"] = AnnotatorTab(self._state, self.settings)
+                    self._tabs["annotator"] = AnnotatorTab(
+                        self._state,
+                        self.settings,
+                        supervisor_getter=lambda: self.supervisor,
+                    )
                     self._tabs["annotator"].build()
 
                 with ui.tab_panel("overlay"):
-                    self._tabs["overlay"] = OverlayTab(self._state, self.settings)
+                    self._tabs["overlay"] = OverlayTab(
+                        self._state,
+                        self.settings,
+                        supervisor_getter=lambda: self.supervisor,
+                    )
                     self._tabs["overlay"].build()
 
     async def start_pipeline(self) -> None:

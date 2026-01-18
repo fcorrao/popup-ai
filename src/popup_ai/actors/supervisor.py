@@ -8,7 +8,7 @@ import ray
 from ray.util.queue import Queue
 
 from popup_ai.config import Settings
-from popup_ai.messages import ActorStatus
+from popup_ai.messages import ActorStatus, Annotation, AudioChunk, Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -229,3 +229,199 @@ class PipelineSupervisor:
     def configure(self, settings: Settings) -> None:
         """Update configuration (requires restart of affected actors)."""
         self.settings = settings
+
+    # ========== Test Injection Methods ==========
+
+    def inject_audio(
+        self, pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1
+    ) -> None:
+        """Inject PCM audio data into the audio queue for testing.
+
+        Args:
+            pcm_bytes: Raw PCM audio data (16-bit)
+            sample_rate: Sample rate in Hz
+            channels: Number of audio channels
+        """
+        import time
+
+        from popup_ai.audio import chunk_pcm, get_audio_duration_ms
+
+        # Chunk the audio into appropriate sizes
+        chunks = chunk_pcm(pcm_bytes, sample_rate, channels, chunk_duration_ms=500)
+
+        timestamp_ms = int(time.time() * 1000)
+        for i, chunk_data in enumerate(chunks):
+            audio_chunk = AudioChunk(
+                data=chunk_data,
+                timestamp_ms=timestamp_ms + (i * 500),
+                sample_rate=sample_rate,
+                channels=channels,
+            )
+            self._queues["audio"].put(audio_chunk)
+
+        duration_ms = get_audio_duration_ms(pcm_bytes, sample_rate, channels)
+        self._logger.info(
+            f"Injected {len(chunks)} audio chunks ({duration_ms}ms) into audio queue"
+        )
+
+    def inject_transcript(
+        self, text: str, segments: list[dict] | None = None
+    ) -> None:
+        """Inject a transcript directly into the transcript queue for testing.
+
+        Args:
+            text: Full transcript text
+            segments: Optional list of segment dicts with text, start_ms, end_ms
+        """
+        import time
+
+        from popup_ai.messages import TranscriptSegment
+
+        timestamp_ms = int(time.time() * 1000)
+
+        # Build segments if provided
+        segment_objs = []
+        if segments:
+            for seg in segments:
+                segment_objs.append(
+                    TranscriptSegment(
+                        text=seg.get("text", ""),
+                        start_ms=seg.get("start_ms", 0),
+                        end_ms=seg.get("end_ms", 0),
+                        confidence=seg.get("confidence", 1.0),
+                    )
+                )
+        else:
+            # Create a single segment for the whole text
+            segment_objs.append(
+                TranscriptSegment(
+                    text=text,
+                    start_ms=0,
+                    end_ms=0,
+                    confidence=1.0,
+                )
+            )
+
+        transcript = Transcript(
+            text=text,
+            segments=segment_objs,
+            is_partial=False,
+            timestamp_ms=timestamp_ms,
+        )
+        self._queues["transcript"].put(transcript)
+        self._logger.info(f"Injected transcript into transcript queue: {text[:50]}...")
+
+    def inject_annotation(
+        self, term: str, explanation: str, slot: int = 1, duration_ms: int = 5000
+    ) -> None:
+        """Inject an annotation directly into the annotation queue for testing.
+
+        Args:
+            term: Term to display
+            explanation: Explanation text
+            slot: Display slot (1-4)
+            duration_ms: How long to display
+        """
+        import time
+
+        timestamp_ms = int(time.time() * 1000)
+        annotation = Annotation(
+            term=term,
+            explanation=explanation,
+            display_duration_ms=duration_ms,
+            slot=slot,
+            timestamp_ms=timestamp_ms,
+        )
+        self._queues["annotation"].put(annotation)
+        self._logger.info(f"Injected annotation into annotation queue: {term}")
+
+    # ========== Overlay Proxy Methods ==========
+
+    async def overlay_send_text(self, slot: int, text: str) -> bool:
+        """Send text directly to an OBS overlay slot.
+
+        Args:
+            slot: Slot number (1-4)
+            text: Text to display
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if "overlay" not in self._actors:
+            self._logger.warning("Overlay actor not running")
+            return False
+
+        try:
+            await self._actors["overlay"].send_text.remote(slot, text)
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to send text to overlay: {e}")
+            return False
+
+    async def overlay_clear_slot(self, slot: int) -> bool:
+        """Clear a specific overlay slot.
+
+        Args:
+            slot: Slot number (1-4)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if "overlay" not in self._actors:
+            self._logger.warning("Overlay actor not running")
+            return False
+
+        try:
+            await self._actors["overlay"].clear_slot.remote(slot)
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to clear slot: {e}")
+            return False
+
+    async def overlay_clear_all(self) -> bool:
+        """Clear all overlay slots.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if "overlay" not in self._actors:
+            self._logger.warning("Overlay actor not running")
+            return False
+
+        try:
+            await self._actors["overlay"].clear_all.remote()
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to clear all slots: {e}")
+            return False
+
+    async def overlay_reconnect(self) -> bool:
+        """Reconnect the overlay to OBS.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if "overlay" not in self._actors:
+            self._logger.warning("Overlay actor not running")
+            return False
+
+        try:
+            return await self._actors["overlay"].reconnect.remote()
+        except Exception as e:
+            self._logger.error(f"Failed to reconnect overlay: {e}")
+            return False
+
+    async def overlay_ping(self) -> bool:
+        """Ping the OBS connection to check status.
+
+        Returns:
+            True if connected, False otherwise
+        """
+        if "overlay" not in self._actors:
+            return False
+
+        try:
+            status = await self._actors["overlay"].get_status.remote()
+            return status.stats.get("obs_connected", False)
+        except Exception:
+            return False

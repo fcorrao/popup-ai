@@ -1,5 +1,8 @@
 """Annotator tab with transcript input and annotation output."""
 
+from collections.abc import Callable
+from typing import Any
+
 from nicegui import ui
 
 from popup_ai.config import Settings
@@ -15,12 +18,25 @@ from popup_ai.ui.state import UIState
 class AnnotatorTab:
     """Annotator tab displaying transcript input and annotation output."""
 
-    def __init__(self, state: UIState, settings: Settings) -> None:
+    def __init__(
+        self,
+        state: UIState,
+        settings: Settings,
+        supervisor_getter: Callable[[], Any] | None = None,
+    ) -> None:
         self._state = state
         self._settings = settings
+        self._supervisor_getter = supervisor_getter
         self._status_card: StatusCard | None = None
         self._input_viewer: DataViewer | None = None
         self._output_viewer: DataViewer | None = None
+        # Test panel inputs
+        self._transcript_input: ui.textarea | None = None
+        self._transcript_status: ui.label | None = None
+        self._term_input: ui.input | None = None
+        self._explanation_input: ui.textarea | None = None
+        self._slot_select: ui.select | None = None
+        self._annotation_status: ui.label | None = None
 
     def build(self) -> ui.column:
         """Build and return the annotator tab content."""
@@ -33,6 +49,66 @@ class AnnotatorTab:
                 "annotator", stage.status if stage else None
             )
             self._status_card.build()
+
+            # Test Input panel (collapsed)
+            with ui.expansion("Test Input", icon="science").classes("w-full"):
+                with ui.tabs().classes("w-full") as test_tabs:
+                    ui.tab("inject_transcript", label="Inject Transcript", icon="text_fields")
+                    ui.tab("inject_annotation", label="Inject Annotation", icon="label")
+
+                with ui.tab_panels(test_tabs, value="inject_transcript").classes("w-full"):
+                    # Transcript injection tab (test LLM annotation)
+                    with ui.tab_panel("inject_transcript"):
+                        with ui.column().classes("gap-2 p-2 w-full"):
+                            ui.label(
+                                "Enter text to test LLM annotation"
+                            ).classes("text-caption text-grey")
+
+                            self._transcript_input = ui.textarea(
+                                placeholder="Enter text for the LLM to annotate..."
+                            ).classes("w-full").props("rows=3")
+
+                            with ui.row().classes("gap-2"):
+                                ui.button(
+                                    "Send to Annotator",
+                                    on_click=self._handle_inject_transcript,
+                                    icon="send",
+                                ).props("color=primary")
+
+                            self._transcript_status = ui.label("").classes("text-caption")
+
+                    # Annotation injection tab (bypass LLM)
+                    with ui.tab_panel("inject_annotation"):
+                        with ui.column().classes("gap-2 p-2 w-full"):
+                            ui.label(
+                                "Inject annotation directly (bypasses LLM)"
+                            ).classes("text-caption text-grey")
+
+                            with ui.row().classes("gap-4 w-full"):
+                                self._term_input = ui.input(
+                                    label="Term",
+                                    placeholder="e.g., API",
+                                ).classes("flex-1")
+
+                                self._slot_select = ui.select(
+                                    label="Slot",
+                                    options=[1, 2, 3, 4],
+                                    value=1,
+                                ).classes("w-24")
+
+                            self._explanation_input = ui.textarea(
+                                label="Explanation",
+                                placeholder="e.g., Application Programming Interface...",
+                            ).classes("w-full").props("rows=2")
+
+                            with ui.row().classes("gap-2"):
+                                ui.button(
+                                    "Inject Annotation",
+                                    on_click=self._handle_inject_annotation,
+                                    icon="add",
+                                ).props("color=primary")
+
+                            self._annotation_status = ui.label("").classes("text-caption")
 
             # Input/Output viewers side by side
             with ui.row().classes("w-full gap-4"):
@@ -81,6 +157,93 @@ class AnnotatorTab:
                     )
 
         return container
+
+    async def _handle_inject_transcript(self) -> None:
+        """Handle transcript injection for LLM annotation test."""
+        if not self._supervisor_getter:
+            ui.notify("Pipeline not initialized", type="warning")
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            ui.notify("Pipeline not running", type="warning")
+            return
+
+        if not self._transcript_input:
+            return
+
+        text = self._transcript_input.value
+        if not text or not text.strip():
+            ui.notify("Please enter text to annotate", type="warning")
+            return
+
+        try:
+            # Inject transcript to be processed by annotator LLM
+            supervisor.inject_transcript.remote(text.strip())
+
+            # Update status
+            if self._transcript_status:
+                self._transcript_status.set_text(f"Sent: {text[:50]}...")
+
+            ui.notify("Transcript sent to annotator", type="positive")
+
+            # Clear input
+            self._transcript_input.set_value("")
+
+        except Exception as ex:
+            ui.notify(f"Failed to inject transcript: {ex}", type="negative")
+            if self._transcript_status:
+                self._transcript_status.set_text(f"Error: {ex}")
+
+    async def _handle_inject_annotation(self) -> None:
+        """Handle direct annotation injection (bypasses LLM)."""
+        if not self._supervisor_getter:
+            ui.notify("Pipeline not initialized", type="warning")
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            ui.notify("Pipeline not running", type="warning")
+            return
+
+        if not self._term_input or not self._explanation_input or not self._slot_select:
+            return
+
+        term = self._term_input.value
+        explanation = self._explanation_input.value
+        slot = self._slot_select.value
+
+        if not term or not term.strip():
+            ui.notify("Please enter a term", type="warning")
+            return
+
+        if not explanation or not explanation.strip():
+            ui.notify("Please enter an explanation", type="warning")
+            return
+
+        try:
+            # Inject annotation directly (bypasses LLM)
+            supervisor.inject_annotation.remote(
+                term.strip(),
+                explanation.strip(),
+                int(slot),
+                5000,  # 5 second display duration
+            )
+
+            # Update status
+            if self._annotation_status:
+                self._annotation_status.set_text(f"Injected: {term} -> slot {slot}")
+
+            ui.notify(f"Annotation '{term}' injected to slot {slot}", type="positive")
+
+            # Clear inputs
+            self._term_input.set_value("")
+            self._explanation_input.set_value("")
+
+        except Exception as ex:
+            ui.notify(f"Failed to inject annotation: {ex}", type="negative")
+            if self._annotation_status:
+                self._annotation_status.set_text(f"Error: {ex}")
 
     def handle_event(self, event: UIEvent) -> None:
         """Handle a UI event for this tab."""

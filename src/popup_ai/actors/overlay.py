@@ -297,3 +297,82 @@ class OverlayActor:
             self.ui_queue.put_nowait(event)
         except Exception:
             pass
+
+    # ========== Public Methods for Direct Control ==========
+
+    async def send_text(self, slot: int, text: str) -> None:
+        """Send text directly to an OBS overlay slot.
+
+        This bypasses the normal annotation flow and directly updates the OBS source.
+
+        Args:
+            slot: Slot number (1-4)
+            text: Text to display
+        """
+        if not (1 <= slot <= self.config.max_slots):
+            self._logger.warning(f"Invalid slot {slot}, must be 1-{self.config.max_slots}")
+            return
+
+        if self._obs_client and self._obs_connected:
+            source_name = f"popup-ai-slot-{slot}"
+            try:
+                self._obs_client.set_input_settings(
+                    source_name,
+                    {"text": text},
+                    True,
+                )
+                self._publish_ui_event("display", {
+                    "slot": slot,
+                    "term": text[:20] if len(text) > 20 else text,
+                    "explanation": "",
+                    "direct": True,
+                })
+                self._logger.debug(f"Direct text sent to slot {slot}: {text[:30]}...")
+            except Exception as e:
+                self._logger.warning(f"Failed to send text to OBS: {e}")
+        else:
+            self._logger.warning("OBS not connected, cannot send text")
+
+    async def clear_slot(self, slot: int) -> None:
+        """Clear a specific overlay slot (public wrapper).
+
+        Args:
+            slot: Slot number (1-4)
+        """
+        if not (1 <= slot <= self.config.max_slots):
+            self._logger.warning(f"Invalid slot {slot}, must be 1-{self.config.max_slots}")
+            return
+
+        await self._clear_slot(slot)
+        # Remove from tracking if present
+        if slot in self._slots:
+            del self._slots[slot]
+
+    async def clear_all(self) -> None:
+        """Clear all overlay slots (public wrapper)."""
+        await self._clear_all_slots()
+
+    async def reconnect(self) -> bool:
+        """Reconnect to OBS websocket.
+
+        Returns:
+            True if reconnection successful, False otherwise
+        """
+        self._logger.info("Attempting OBS reconnection...")
+
+        # Disconnect existing client if any
+        if self._obs_client:
+            with contextlib.suppress(Exception):
+                self._obs_client.disconnect()
+            self._obs_client = None
+            self._obs_connected = False
+
+        # Attempt reconnection
+        try:
+            await self._connect_obs()
+            self._publish_ui_event("reconnected", {"obs_connected": self._obs_connected})
+            return self._obs_connected
+        except Exception as e:
+            self._logger.error(f"OBS reconnection failed: {e}")
+            self._publish_ui_event("reconnect_failed", {"error": str(e)})
+            return False

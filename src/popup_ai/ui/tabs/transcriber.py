@@ -1,6 +1,9 @@
 """Transcriber tab with audio input and transcript output."""
 
-from nicegui import ui
+from collections.abc import Callable
+from typing import Any
+
+from nicegui import events, ui
 
 from popup_ai.config import Settings
 from popup_ai.messages import UIEvent
@@ -15,12 +18,21 @@ from popup_ai.ui.state import UIState
 class TranscriberTab:
     """Transcriber tab displaying audio input and transcript output."""
 
-    def __init__(self, state: UIState, settings: Settings) -> None:
+    def __init__(
+        self,
+        state: UIState,
+        settings: Settings,
+        supervisor_getter: Callable[[], Any] | None = None,
+    ) -> None:
         self._state = state
         self._settings = settings
+        self._supervisor_getter = supervisor_getter
         self._status_card: StatusCard | None = None
         self._input_viewer: DataViewer | None = None
         self._output_viewer: DataViewer | None = None
+        self._upload_status: ui.label | None = None
+        self._transcript_input: ui.textarea | None = None
+        self._inject_status: ui.label | None = None
 
     def build(self) -> ui.column:
         """Build and return the transcriber tab content."""
@@ -33,6 +45,51 @@ class TranscriberTab:
                 "transcriber", stage.status if stage else None
             )
             self._status_card.build()
+
+            # Test Input panel (collapsed)
+            with ui.expansion("Test Input", icon="science").classes("w-full"):
+                with ui.tabs().classes("w-full") as test_tabs:
+                    ui.tab("inject_audio", label="Inject Audio", icon="audiotrack")
+                    ui.tab("inject_transcript", label="Inject Transcript", icon="text_fields")
+
+                with ui.tab_panels(test_tabs, value="inject_audio").classes("w-full"):
+                    # Audio injection tab
+                    with ui.tab_panel("inject_audio"):
+                        with ui.column().classes("gap-2 p-2"):
+                            ui.label(
+                                "Upload audio file to test transcription"
+                            ).classes("text-caption text-grey")
+
+                            with ui.row().classes("items-center gap-4"):
+                                ui.upload(
+                                    label="Select Audio File",
+                                    auto_upload=True,
+                                    on_upload=self._handle_audio_upload,
+                                ).props('accept=".wav,.mp3,.m4a,.flac,.ogg,.webm"').classes(
+                                    "max-w-xs"
+                                )
+
+                            self._upload_status = ui.label("").classes("text-caption")
+
+                    # Transcript injection tab (bypass transcription)
+                    with ui.tab_panel("inject_transcript"):
+                        with ui.column().classes("gap-2 p-2 w-full"):
+                            ui.label(
+                                "Enter transcript text to bypass transcription"
+                            ).classes("text-caption text-grey")
+
+                            self._transcript_input = ui.textarea(
+                                placeholder="Enter transcript text to inject..."
+                            ).classes("w-full").props("rows=3")
+
+                            with ui.row().classes("gap-2"):
+                                ui.button(
+                                    "Inject Transcript",
+                                    on_click=self._handle_inject_transcript,
+                                    icon="send",
+                                ).props("color=primary")
+
+                            self._inject_status = ui.label("").classes("text-caption")
 
             # Input/Output viewers side by side
             with ui.row().classes("w-full gap-4"):
@@ -102,6 +159,91 @@ class TranscriberTab:
                     )
 
         return container
+
+    async def _handle_audio_upload(self, e: events.UploadEventArguments) -> None:
+        """Handle audio file upload for test injection."""
+        if not self._supervisor_getter:
+            ui.notify("Pipeline not initialized", type="warning")
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            ui.notify("Pipeline not running", type="warning")
+            return
+
+        try:
+            # Get file info
+            filename = e.name
+            file_bytes = e.content.read()
+            format_ext = filename.rsplit(".", 1)[-1].lower()
+
+            # Convert to PCM
+            from popup_ai.audio import convert_to_pcm, get_audio_duration_ms
+
+            pcm_bytes, sample_rate, channels = convert_to_pcm(
+                file_bytes,
+                format_ext,
+                target_sample_rate=self._settings.audio.sample_rate,
+                target_channels=self._settings.audio.channels,
+            )
+
+            duration_ms = get_audio_duration_ms(pcm_bytes, sample_rate, channels)
+
+            # Inject into pipeline (will go to transcriber via audio queue)
+            supervisor.inject_audio.remote(pcm_bytes, sample_rate, channels)
+
+            # Update status
+            if self._upload_status:
+                self._upload_status.set_text(
+                    f"Injected {duration_ms / 1000:.1f}s of audio from {filename}"
+                )
+
+            ui.notify(
+                f"Injected {duration_ms / 1000:.1f}s of audio for transcription",
+                type="positive",
+            )
+
+        except Exception as ex:
+            ui.notify(f"Failed to process audio: {ex}", type="negative")
+            if self._upload_status:
+                self._upload_status.set_text(f"Error: {ex}")
+
+    async def _handle_inject_transcript(self) -> None:
+        """Handle direct transcript injection."""
+        if not self._supervisor_getter:
+            ui.notify("Pipeline not initialized", type="warning")
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            ui.notify("Pipeline not running", type="warning")
+            return
+
+        if not self._transcript_input:
+            return
+
+        text = self._transcript_input.value
+        if not text or not text.strip():
+            ui.notify("Please enter transcript text", type="warning")
+            return
+
+        try:
+            # Inject transcript directly (bypasses transcription)
+            supervisor.inject_transcript.remote(text.strip())
+
+            # Update status
+            if self._inject_status:
+                self._inject_status.set_text(f"Injected: {text[:50]}...")
+
+            ui.notify("Transcript injected", type="positive")
+
+            # Clear input
+            self._transcript_input.set_value("")
+
+        except Exception as ex:
+            ui.notify(f"Failed to inject transcript: {ex}", type="negative")
+            if self._inject_status:
+                self._inject_status.set_text(f"Error: {ex}")
 
     def handle_event(self, event: UIEvent) -> None:
         """Handle a UI event for this tab."""
