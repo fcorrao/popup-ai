@@ -78,6 +78,8 @@ class AudioIngestActor:
         self._running = False
         self._process: subprocess.Popen | None = None
         self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
+        self._ffmpeg_stderr: list[str] = []
         self._chunks_sent = 0
         self._bytes_processed = 0
         self._ffmpeg_available = False
@@ -151,11 +153,16 @@ class AudioIngestActor:
         self._logger.info("Stopping audio ingest actor")
         self._running = False
 
-        # Cancel reader task
+        # Cancel reader tasks
         if self._reader_task:
             self._reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reader_task
+
+        if self._stderr_task:
+            self._stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._stderr_task
 
         # Terminate ffmpeg
         if self._process:
@@ -187,7 +194,7 @@ class AudioIngestActor:
         cmd = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", "warning",
+            "-loglevel", "info",  # Use info level for more diagnostic output
             "-i", srt_url,
             "-vn",  # No video
             "-acodec", "pcm_s16le",
@@ -199,6 +206,9 @@ class AudioIngestActor:
 
         self._logger.info(f"Starting ffmpeg: {' '.join(cmd)}")
 
+        # Clear previous stderr
+        self._ffmpeg_stderr = []
+
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -206,8 +216,9 @@ class AudioIngestActor:
             bufsize=0,
         )
 
-        # Start reading output
+        # Start reading output and stderr
         self._reader_task = asyncio.create_task(self._read_audio())
+        self._stderr_task = asyncio.create_task(self._read_stderr())
 
     async def _read_audio(self) -> None:
         """Read audio data from ffmpeg and push to queue."""
@@ -233,10 +244,24 @@ class AudioIngestActor:
 
                 if not data:
                     if self._process and self._process.poll() is not None:
-                        # Process ended
-                        self._logger.warning("ffmpeg process ended")
+                        # Process ended - get exit code and stderr
+                        exit_code = self._process.returncode
+                        stderr_output = "\n".join(self._ffmpeg_stderr[-20:])  # Last 20 lines
+
+                        self._logger.error(
+                            f"ffmpeg process ended with exit code {exit_code}\n"
+                            f"stderr output:\n{stderr_output}"
+                        )
                         self._state = "error"
-                        self._error = "ffmpeg process ended unexpectedly"
+                        self._error = (
+                            f"ffmpeg exited with code {exit_code}. "
+                            f"Last output: {stderr_output[:500]}"
+                        )
+                        self._publish_ui_event("error", {
+                            "message": self._error,
+                            "exit_code": exit_code,
+                            "stderr": stderr_output,
+                        })
                         break
                     continue
 
@@ -260,6 +285,44 @@ class AudioIngestActor:
                 break
             except Exception:
                 self._logger.exception("Error reading audio")
+                await asyncio.sleep(0.1)
+
+    async def _read_stderr(self) -> None:
+        """Read stderr from ffmpeg and log it."""
+        loop = asyncio.get_event_loop()
+
+        while self._running and self._process:
+            try:
+                def read_line() -> str:
+                    if self._process and self._process.stderr:
+                        line = self._process.stderr.readline()
+                        if line:
+                            return line.decode("utf-8", errors="replace").rstrip()
+                    return ""
+
+                line = await loop.run_in_executor(None, read_line)
+
+                if line:
+                    self._ffmpeg_stderr.append(line)
+                    # Keep only last 100 lines to avoid memory bloat
+                    if len(self._ffmpeg_stderr) > 100:
+                        self._ffmpeg_stderr = self._ffmpeg_stderr[-100:]
+                    # Log ffmpeg output at debug level (info for errors/warnings)
+                    if "error" in line.lower() or "warning" in line.lower():
+                        self._logger.warning(f"[ffmpeg] {line}")
+                    else:
+                        self._logger.debug(f"[ffmpeg] {line}")
+                elif self._process and self._process.poll() is not None:
+                    # Process ended
+                    break
+                else:
+                    # No data, brief sleep
+                    await asyncio.sleep(0.01)
+
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                self._logger.exception("Error reading ffmpeg stderr")
                 await asyncio.sleep(0.1)
 
     def _publish_ui_event(self, event_type: str, data: dict) -> None:
