@@ -1265,6 +1265,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Observability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-traced" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Gets Traced
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quota-conscious-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quota-Conscious Design
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboard-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard Links
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#failure-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1606,6 +1667,67 @@
     <span class="md-ellipsis">
       
         Why SQLite for Cache?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Observability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-traced" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Gets Traced
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quota-conscious-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quota-Conscious Design
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboard-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard Links
       
     </span>
   </a>
@@ -2023,6 +2145,67 @@
 <li><strong>Simple</strong>: Single table, key-value pattern</li>
 </ul>
 <p>For v1, this is sufficient. Future versions may add Redis for distributed caching.</p>
+<h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
+<p>popup-ai integrates <a href="https://logfire.pydantic.dev/">Logfire</a> for observability, providing traces, metrics, and error tracking.</p>
+<h3 id="what-gets-traced">What Gets Traced<a class="headerlink" href="#what-gets-traced" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Traces</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pydantic-ai</td>
+<td>Automatic LLM call tracing (prompts, responses, latency)</td>
+</tr>
+<tr>
+<td>Actor lifecycle</td>
+<td>Start/stop spans for all actors</td>
+</tr>
+<tr>
+<td>Errors</td>
+<td>All exceptions with full context</td>
+</tr>
+</tbody>
+</table>
+<h3 id="custom-metrics">Custom Metrics<a class="headerlink" href="#custom-metrics" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>popup_ai.llm_calls</code></td>
+<td>Counter</td>
+<td>Total LLM API calls</td>
+</tr>
+<tr>
+<td><code>popup_ai.llm_cache_hits</code></td>
+<td>Counter</td>
+<td>Cache hits (avoided LLM calls)</td>
+</tr>
+<tr>
+<td><code>popup_ai.llm_latency_ms</code></td>
+<td>Histogram</td>
+<td>LLM response latency</td>
+</tr>
+</tbody>
+</table>
+<h3 id="quota-conscious-design">Quota-Conscious Design<a class="headerlink" href="#quota-conscious-design" title="Permanent link">&para;</a></h3>
+<p>The default 50% head sampling keeps quota usage reasonable while capturing enough data for debugging. Errors are always captured regardless of sampling rate.</p>
+<h3 id="dashboard-links">Dashboard Links<a class="headerlink" href="#dashboard-links" title="Permanent link">&para;</a></h3>
+<p>The admin UI provides direct links to:</p>
+<ul>
+<li><strong>Docs</strong> - Project documentation</li>
+<li><strong>Ray Dashboard</strong> - Actor status, resource usage, logs</li>
+<li><strong>Logfire</strong> - Traces, metrics, error tracking</li>
+</ul>
 <h2 id="failure-modes">Failure Modes<a class="headerlink" href="#failure-modes" title="Permanent link">&para;</a></h2>
 <h3 id="actor-crash">Actor Crash<a class="headerlink" href="#actor-crash" title="Permanent link">&para;</a></h3>
 <ol>

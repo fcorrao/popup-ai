@@ -1104,6 +1104,56 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#logfireconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LogfireConfig
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="LogfireConfig">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#default-dashboard-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Default Dashboard URL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-traced" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Gets Traced
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sampling-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sampling Strategy
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1531,6 +1581,56 @@
     <span class="md-ellipsis">
       
         OBS WebSocket Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logfireconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LogfireConfig
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="LogfireConfig">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#default-dashboard-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Default Dashboard URL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-traced" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Gets Traced
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sampling-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sampling Strategy
       
     </span>
   </a>
@@ -1980,25 +2080,89 @@
 <li>Set a password if desired</li>
 <li>Configure popup-ai with matching settings</li>
 </ol>
+<h3 id="logfireconfig">LogfireConfig<a class="headerlink" href="#logfireconfig" title="Permanent link">&para;</a></h3>
+<p>Settings for <a href="https://logfire.pydantic.dev/">Logfire</a> observability integration.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Env Var</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>POPUP_LOGFIRE_ENABLED</code></td>
+<td>bool</td>
+<td><code>true</code></td>
+<td>Enable Logfire observability</td>
+</tr>
+<tr>
+<td><code>sample_rate</code></td>
+<td><code>POPUP_LOGFIRE_SAMPLE_RATE</code></td>
+<td>float</td>
+<td><code>0.5</code></td>
+<td>Trace sampling rate (0.0-1.0)</td>
+</tr>
+<tr>
+<td><code>environment</code></td>
+<td><code>POPUP_LOGFIRE_ENVIRONMENT</code></td>
+<td>str</td>
+<td><code>development</code></td>
+<td>Environment name for traces</td>
+</tr>
+<tr>
+<td><code>dashboard_url</code></td>
+<td><code>POPUP_LOGFIRE_DASHBOARD_URL</code></td>
+<td>str</td>
+<td>(see below)</td>
+<td>Logfire dashboard URL</td>
+</tr>
+</tbody>
+</table>
+<h4 id="default-dashboard-url">Default Dashboard URL<a class="headerlink" href="#default-dashboard-url" title="Permanent link">&para;</a></h4>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>https://logfire-us.pydantic.dev/fcorrao/popup-ai
+</span></code></pre></div>
+<h4 id="what-gets-traced">What Gets Traced<a class="headerlink" href="#what-gets-traced" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>pydantic-ai agent runs</strong> - Automatic LLM call tracing via <code>instrument_pydantic_ai()</code></li>
+<li><strong>Actor lifecycle events</strong> - Start/stop spans for all actors</li>
+<li><strong>Errors and exceptions</strong> - Always captured regardless of sampling rate</li>
+<li><strong>Custom metrics</strong> - <code>popup_ai.llm_calls</code>, <code>popup_ai.llm_cache_hits</code>, <code>popup_ai.llm_latency_ms</code></li>
+</ul>
+<h4 id="sampling-strategy">Sampling Strategy<a class="headerlink" href="#sampling-strategy" title="Permanent link">&para;</a></h4>
+<p>The default 50% head sampling balances observability with quota usage. Logfire automatically escalates errors to 100% capture regardless of sampling rate.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Disable observability entirely</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_LOGFIRE_ENABLED</span><span class="o">=</span><span class="nb">false</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Full tracing for debugging</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_LOGFIRE_SAMPLE_RATE</span><span class="o">=</span><span class="m">1</span>.0
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Minimal tracing for production</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_LOGFIRE_SAMPLE_RATE</span><span class="o">=</span><span class="m">0</span>.1
+</span></code></pre></div>
 <h2 id="example-configurations">Example Configurations<a class="headerlink" href="#example-configurations" title="Permanent link">&para;</a></h2>
 <h3 id="development-setup">Development Setup<a class="headerlink" href="#development-setup" title="Permanent link">&para;</a></h3>
 <p>Minimal configuration for local development:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_ENABLED</span><span class="o">=</span><span class="nb">false</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_TRANSCRIBER_MODEL</span><span class="o">=</span><span class="s2">&quot;mlx-community/whisper-tiny-mlx&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_ENABLED</span><span class="o">=</span><span class="nb">false</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_TRANSCRIBER_MODEL</span><span class="o">=</span><span class="s2">&quot;mlx-community/whisper-tiny-mlx&quot;</span>
 </span></code></pre></div>
 <h3 id="production-setup">Production Setup<a class="headerlink" href="#production-setup" title="Permanent link">&para;</a></h3>
 <p>Full pipeline with optimized settings:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_TRANSCRIBER_MODEL</span><span class="o">=</span><span class="s2">&quot;mlx-community/whisper-small-mlx&quot;</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_TRANSCRIBER_CHUNK_LENGTH_S</span><span class="o">=</span><span class="s2">&quot;5.0&quot;</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_AUDIO_SRT_LATENCY_MS</span><span class="o">=</span><span class="s2">&quot;200&quot;</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_HOLD_DURATION_MS</span><span class="o">=</span><span class="s2">&quot;6000&quot;</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_LOG_LEVEL</span><span class="o">=</span><span class="s2">&quot;WARNING&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_TRANSCRIBER_MODEL</span><span class="o">=</span><span class="s2">&quot;mlx-community/whisper-small-mlx&quot;</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_TRANSCRIBER_CHUNK_LENGTH_S</span><span class="o">=</span><span class="s2">&quot;5.0&quot;</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_AUDIO_SRT_LATENCY_MS</span><span class="o">=</span><span class="s2">&quot;200&quot;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_HOLD_DURATION_MS</span><span class="o">=</span><span class="s2">&quot;6000&quot;</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_LOG_LEVEL</span><span class="o">=</span><span class="s2">&quot;WARNING&quot;</span>
 </span></code></pre></div>
 <h3 id="remote-obs">Remote OBS<a class="headerlink" href="#remote-obs" title="Permanent link">&para;</a></h3>
 <p>Connecting to OBS on another machine:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_OBS_HOST</span><span class="o">=</span><span class="s2">&quot;192.168.1.100&quot;</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_OBS_PORT</span><span class="o">=</span><span class="s2">&quot;4455&quot;</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_OBS_PASSWORD</span><span class="o">=</span><span class="s2">&quot;your-password&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_OBS_HOST</span><span class="o">=</span><span class="s2">&quot;192.168.1.100&quot;</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_OBS_PORT</span><span class="o">=</span><span class="s2">&quot;4455&quot;</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">POPUP_OVERLAY_OBS_PASSWORD</span><span class="o">=</span><span class="s2">&quot;your-password&quot;</span>
 </span></code></pre></div>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>

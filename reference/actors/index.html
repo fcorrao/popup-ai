@@ -1386,6 +1386,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#independent-testability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Independent Testability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Independent Testability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#design-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Principles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testing-an-actor-in-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing an Actor in Isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ui-injection-for-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UI Injection for Testing
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1994,6 +2044,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#independent-testability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Independent Testability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Independent Testability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#design-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Principles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#testing-an-actor-in-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing an Actor in Isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ui-injection-for-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UI Injection for Testing
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2364,6 +2464,48 @@
 <li>Supervisor checks every 5 seconds</li>
 <li>Unhealthy actors are automatically restarted</li>
 </ul>
+<h2 id="independent-testability">Independent Testability<a class="headerlink" href="#independent-testability" title="Permanent link">&para;</a></h2>
+<p>Each actor is designed to be testable in isolation without requiring the full pipeline:</p>
+<h3 id="design-principles">Design Principles<a class="headerlink" href="#design-principles" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Queue-based I/O</strong>: Actors only communicate via Ray Queues, not direct method calls</li>
+<li><strong>Configuration injection</strong>: All settings passed via config objects</li>
+<li><strong>No global state</strong>: Actors are self-contained</li>
+<li><strong>Optional dependencies</strong>: External services (OBS, LLM APIs) handled gracefully when unavailable</li>
+</ul>
+<h3 id="testing-an-actor-in-isolation">Testing an Actor in Isolation<a class="headerlink" href="#testing-an-actor-in-isolation" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">ray</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ray.util.queue</span><span class="w"> </span><span class="kn">import</span> <span class="n">Queue</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">popup_ai.actors.annotator</span><span class="w"> </span><span class="kn">import</span> <span class="n">AnnotatorActor</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">popup_ai.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">AnnotatorConfig</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">popup_ai.messages</span><span class="w"> </span><span class="kn">import</span> <span class="n">Transcript</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="n">ray</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="c1"># Create test queues</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="n">input_queue</span> <span class="o">=</span> <span class="n">Queue</span><span class="p">()</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="n">output_queue</span> <span class="o">=</span> <span class="n">Queue</span><span class="p">()</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="c1"># Create actor with test config</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="n">config</span> <span class="o">=</span> <span class="n">AnnotatorConfig</span><span class="p">(</span><span class="n">cache_enabled</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="n">actor</span> <span class="o">=</span> <span class="n">AnnotatorActor</span><span class="o">.</span><span class="n">remote</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">input_queue</span><span class="p">,</span> <span class="n">output_queue</span><span class="p">)</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a><span class="c1"># Start and inject test data</span>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a><span class="k">await</span> <span class="n">actor</span><span class="o">.</span><span class="n">start</span><span class="o">.</span><span class="n">remote</span><span class="p">()</span>
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="n">input_queue</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">Transcript</span><span class="p">(</span><span class="n">text</span><span class="o">=</span><span class="s2">&quot;Test transcript&quot;</span><span class="p">,</span> <span class="n">segments</span><span class="o">=</span><span class="p">[],</span> <span class="n">is_partial</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">timestamp_ms</span><span class="o">=</span><span class="mi">0</span><span class="p">))</span>
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a><span class="c1"># Verify output</span>
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a><span class="n">annotation</span> <span class="o">=</span> <span class="n">output_queue</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a><span class="k">assert</span> <span class="n">annotation</span><span class="o">.</span><span class="n">term</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+</span></code></pre></div>
+<h3 id="ui-injection-for-testing">UI Injection for Testing<a class="headerlink" href="#ui-injection-for-testing" title="Permanent link">&para;</a></h3>
+<p>The admin UI supports direct injection of test data into actors via the Annotator tab:</p>
+<ol>
+<li>Start pipeline with only the Annotator actor enabled</li>
+<li>Use the "Inject Transcript" feature to send test text</li>
+<li>Observe annotations in the Overlay tab or OBS</li>
+</ol>
+<p>This allows testing the LLM integration without needing live audio input.</p>
 <h2 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../../explanation/architecture/">Architecture</a> - Design overview</li>
