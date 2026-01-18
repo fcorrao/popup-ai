@@ -25,6 +25,11 @@ class OverlayActor:
     - Graceful OBS reconnection
     """
 
+    # Reconnection settings
+    INITIAL_RETRY_DELAY_S = 1.0
+    MAX_RETRY_DELAY_S = 60.0
+    BACKOFF_MULTIPLIER = 2.0
+
     def __init__(
         self,
         config: OverlayConfig,
@@ -40,11 +45,18 @@ class OverlayActor:
         self._running = False
         self._process_task: asyncio.Task | None = None
         self._cleanup_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
         self._annotations_displayed = 0
         self._obs_client = None
         self._obs_connected = False
         self._slots: dict[int, dict] = {}  # slot -> {annotation, hide_at}
         self._logger = logging.getLogger("popup_ai.actors.overlay")
+
+        # Reconnection state
+        self._retry_count = 0
+        self._next_retry_delay_s = self.INITIAL_RETRY_DELAY_S
+        self._next_retry_time: float | None = None
+        self._reconnecting = False
 
     def get_status(self) -> ActorStatus:
         """Get current actor status."""
@@ -52,9 +64,14 @@ class OverlayActor:
             "annotations_displayed": self._annotations_displayed,
             "obs_connected": self._obs_connected,
             "active_slots": len(self._slots),
+            "retry_count": self._retry_count,
         }
         if self._start_time:
             stats["uptime_s"] = time.time() - self._start_time
+        if self._next_retry_time and not self._obs_connected:
+            stats["next_retry_in_s"] = max(0, round(self._next_retry_time - time.time(), 1))
+        if self._reconnecting:
+            stats["reconnecting"] = True
         return ActorStatus(
             name="overlay",
             state=self._state,
@@ -79,6 +96,8 @@ class OverlayActor:
                 self._start_time = time.time()
                 self._process_task = asyncio.create_task(self._process_loop())
                 self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+                # Start background reconnection task (handles auto-reconnect)
+                self._reconnect_task = asyncio.create_task(self._reconnect_loop())
                 self._publish_ui_event("started", {"obs_connected": self._obs_connected})
                 logfire.info(
                     "overlay started",
@@ -102,7 +121,7 @@ class OverlayActor:
             self._running = False
 
             # Cancel tasks
-            for task in [self._process_task, self._cleanup_task]:
+            for task in [self._process_task, self._cleanup_task, self._reconnect_task]:
                 if task:
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -112,11 +131,7 @@ class OverlayActor:
             await self._clear_all_slots()
 
             # Disconnect OBS
-            if self._obs_client:
-                with contextlib.suppress(Exception):
-                    self._obs_client.disconnect()
-                self._obs_client = None
-                self._obs_connected = False
+            self._disconnect_obs()
 
             self._state = "stopped"
             self._start_time = None
@@ -127,8 +142,47 @@ class OverlayActor:
         """Check if actor is healthy."""
         return self._state == "running" and self._running
 
+    def _disconnect_obs(self) -> None:
+        """Disconnect from OBS websocket."""
+        if self._obs_client:
+            with contextlib.suppress(Exception):
+                self._obs_client.disconnect()
+            self._obs_client = None
+        self._obs_connected = False
+
+    def _reset_retry_state(self) -> None:
+        """Reset retry state after successful connection."""
+        self._retry_count = 0
+        self._next_retry_delay_s = self.INITIAL_RETRY_DELAY_S
+        self._next_retry_time = None
+        self._error = None
+
+    def _schedule_retry(self) -> None:
+        """Schedule next retry with exponential backoff."""
+        self._retry_count += 1
+        self._next_retry_time = time.time() + self._next_retry_delay_s
+        self._logger.info(
+            f"OBS reconnect scheduled in {self._next_retry_delay_s:.1f}s "
+            f"(attempt {self._retry_count})"
+        )
+        # Increase delay for next time (exponential backoff)
+        self._next_retry_delay_s = min(
+            self._next_retry_delay_s * self.BACKOFF_MULTIPLIER,
+            self.MAX_RETRY_DELAY_S,
+        )
+
+    def _handle_connection_error(self, operation: str, error: Exception) -> None:
+        """Handle OBS connection error - mark disconnected and schedule retry."""
+        if self._obs_connected:
+            self._logger.warning(f"OBS connection lost during {operation}: {error}")
+            self._obs_connected = False
+            self._error = f"Connection lost: {error}"
+            self._publish_ui_event("connection_lost", {"error": str(error)})
+            self._schedule_retry()
+
     async def _connect_obs(self) -> None:
         """Connect to OBS websocket."""
+        self._reconnecting = True
         try:
             from obsws_python import ReqClient
 
@@ -138,7 +192,12 @@ class OverlayActor:
                 password=self.config.obs_password or "",
             )
             self._obs_connected = True
+            self._reset_retry_state()
             self._logger.info(f"Connected to OBS at {self.config.obs_host}:{self.config.obs_port}")
+            self._publish_ui_event("obs_connected", {
+                "host": self.config.obs_host,
+                "port": self.config.obs_port,
+            })
 
             # Initialize overlay sources if needed
             await self._init_overlay_sources()
@@ -149,6 +208,32 @@ class OverlayActor:
         except Exception as e:
             self._logger.warning(f"Failed to connect to OBS: {e}")
             self._obs_connected = False
+            self._error = f"Connection failed: {e}"
+            self._schedule_retry()
+        finally:
+            self._reconnecting = False
+
+    async def _reconnect_loop(self) -> None:
+        """Background loop for automatic OBS reconnection with exponential backoff."""
+        while self._running:
+            try:
+                await asyncio.sleep(1.0)  # Check every second
+
+                # Skip if already connected or reconnecting
+                if self._obs_connected or self._reconnecting:
+                    continue
+
+                # Check if it's time to retry
+                if self._next_retry_time and time.time() >= self._next_retry_time:
+                    attempt = self._retry_count + 1
+                    self._logger.info(f"Attempting OBS reconnection (attempt {attempt})...")
+                    self._disconnect_obs()
+                    await self._connect_obs()
+
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                self._logger.exception("Error in reconnect loop")
 
     async def _init_overlay_sources(self) -> None:
         """Initialize OBS overlay text sources."""
@@ -259,7 +344,7 @@ class OverlayActor:
                     True,
                 )
             except Exception as e:
-                self._logger.warning(f"Failed to update OBS source: {e}")
+                self._handle_connection_error("display_annotation", e)
 
         self._annotations_displayed += 1
         self._publish_ui_event("display", {
@@ -280,7 +365,7 @@ class OverlayActor:
                     True,
                 )
             except Exception as e:
-                self._logger.warning(f"Failed to clear OBS source: {e}")
+                self._handle_connection_error("clear_slot", e)
 
         self._publish_ui_event("clear", {"slot": slot})
 
@@ -307,7 +392,7 @@ class OverlayActor:
 
     # ========== Public Methods for Direct Control ==========
 
-    async def send_text(self, slot: int, text: str) -> None:
+    async def send_text(self, slot: int, text: str) -> bool:
         """Send text directly to an OBS overlay slot.
 
         This bypasses the normal annotation flow and directly updates the OBS source.
@@ -315,10 +400,13 @@ class OverlayActor:
         Args:
             slot: Slot number (1-4)
             text: Text to display
+
+        Returns:
+            True if text was sent successfully, False otherwise
         """
         if not (1 <= slot <= self.config.max_slots):
             self._logger.warning(f"Invalid slot {slot}, must be 1-{self.config.max_slots}")
-            return
+            return False
 
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
@@ -335,10 +423,13 @@ class OverlayActor:
                     "direct": True,
                 })
                 self._logger.debug(f"Direct text sent to slot {slot}: {text[:30]}...")
+                return True
             except Exception as e:
-                self._logger.warning(f"Failed to send text to OBS: {e}")
+                self._handle_connection_error("send_text", e)
+                return False
         else:
-            self._logger.warning("OBS not connected, cannot send text")
+            self._logger.debug("OBS not connected, cannot send text")
+            return False
 
     async def clear_slot(self, slot: int) -> None:
         """Clear a specific overlay slot (public wrapper).
@@ -360,24 +451,29 @@ class OverlayActor:
         await self._clear_all_slots()
 
     async def reconnect(self) -> bool:
-        """Reconnect to OBS websocket.
+        """Force immediate reconnection to OBS websocket.
+
+        Resets backoff state and attempts connection immediately.
+        Use this for user-initiated reconnection from UI.
 
         Returns:
             True if reconnection successful, False otherwise
         """
-        self._logger.info("Attempting OBS reconnection...")
+        self._logger.info("Force reconnection requested, resetting backoff...")
 
-        # Disconnect existing client if any
-        if self._obs_client:
-            with contextlib.suppress(Exception):
-                self._obs_client.disconnect()
-            self._obs_client = None
-            self._obs_connected = False
+        # Reset backoff state for fresh start
+        self._retry_count = 0
+        self._next_retry_delay_s = self.INITIAL_RETRY_DELAY_S
+        self._next_retry_time = None
+
+        # Disconnect existing client
+        self._disconnect_obs()
 
         # Attempt reconnection
         try:
             await self._connect_obs()
-            self._publish_ui_event("reconnected", {"obs_connected": self._obs_connected})
+            if self._obs_connected:
+                self._publish_ui_event("reconnected", {"obs_connected": True})
             return self._obs_connected
         except Exception as e:
             self._logger.error(f"OBS reconnection failed: {e}")
