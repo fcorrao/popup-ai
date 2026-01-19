@@ -629,10 +629,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#step-6-check-obs-overlay" class="md-nav__link">
+  <a href="#step-6-set-up-obs-overlay" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 6: Check OBS Overlay
+        Step 6: Set Up OBS Overlay
       
     </span>
   </a>
@@ -1401,10 +1401,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#step-6-check-obs-overlay" class="md-nav__link">
+  <a href="#step-6-set-up-obs-overlay" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 6: Check OBS Overlay
+        Step 6: Set Up OBS Overlay
       
     </span>
   </a>
@@ -1586,12 +1586,14 @@
 <li>Annotations appearing in the "Recent Annotations" panel</li>
 </ul>
 <p><img alt="Pipeline Running" class="screenshot" src="../assets/pipeline-running.png" /></p>
-<h2 id="step-6-check-obs-overlay">Step 6: Check OBS Overlay<a class="headerlink" href="#step-6-check-obs-overlay" title="Permanent link">&para;</a></h2>
-<p>popup-ai creates text sources in OBS for displaying annotations:</p>
-<ul>
-<li><code>popup-ai-slot-1</code> through <code>popup-ai-slot-4</code></li>
-</ul>
-<p>Add these sources to your scene to see annotations on stream.</p>
+<h2 id="step-6-set-up-obs-overlay">Step 6: Set Up OBS Overlay<a class="headerlink" href="#step-6-set-up-obs-overlay" title="Permanent link">&para;</a></h2>
+<p>Create text sources in OBS for displaying annotations:</p>
+<ol>
+<li>In your <code>popup-ai-overlay</code> scene, add text sources named <code>popup-ai-slot-1</code>, <code>popup-ai-slot-2</code>, etc.</li>
+<li>popup-ai discovers these sources automatically and uses them to display annotations</li>
+<li>Start with 1-2 slots - most users don't need more</li>
+</ol>
+<p>See <a href="../obs-setup/">OBS Setup</a> for detailed instructions.</p>
 <h2 id="whats-next">What's Next?<a class="headerlink" href="#whats-next" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../admin-ui/">Understanding the Admin UI</a> - Learn all the UI features</li>

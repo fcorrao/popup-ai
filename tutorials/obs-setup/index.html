@@ -658,27 +658,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#option-a-automatic-setup-recommended" class="md-nav__link">
+  <a href="#how-slot-selection-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Option A: Automatic Setup (Recommended)
+        How Slot Selection Works
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#option-b-manual-setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option B: Manual Setup
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Option B: Manual Setup">
-      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#step-1-create-a-scene" class="md-nav__link">
@@ -721,11 +709,6 @@
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -1674,27 +1657,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#option-a-automatic-setup-recommended" class="md-nav__link">
+  <a href="#how-slot-selection-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Option A: Automatic Setup (Recommended)
+        How Slot Selection Works
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#option-b-manual-setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Option B: Manual Setup
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Option B: Manual Setup">
-      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#step-1-create-a-scene" class="md-nav__link">
@@ -1737,11 +1708,6 @@
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -2081,39 +2047,42 @@
 </span></code></pre></div>
 <p>Or in the admin UI Settings panel under "OBS Overlay".</p>
 <h2 id="part-2-scene-and-source-setup">Part 2: Scene and Source Setup<a class="headerlink" href="#part-2-scene-and-source-setup" title="Permanent link">&para;</a></h2>
-<p>popup-ai displays annotations using text sources in OBS. You can set these up manually for more control, or let popup-ai create them automatically.</p>
-<h3 id="option-a-automatic-setup-recommended">Option A: Automatic Setup (Recommended)<a class="headerlink" href="#option-a-automatic-setup-recommended" title="Permanent link">&para;</a></h3>
-<p>popup-ai attempts to create text sources automatically when the Overlay actor starts. It will create:</p>
+<p>popup-ai displays annotations using text sources in OBS. You create these sources manually, giving you full control over positioning and styling.</p>
+<h3 id="how-slot-selection-works">How Slot Selection Works<a class="headerlink" href="#how-slot-selection-works" title="Permanent link">&para;</a></h3>
+<p>popup-ai uses a smart slot selection system:</p>
 <ul>
-<li><code>popup-ai-slot-1</code></li>
-<li><code>popup-ai-slot-2</code></li>
-<li><code>popup-ai-slot-3</code></li>
-<li><code>popup-ai-slot-4</code></li>
+<li><strong>Always prefers the first available slot</strong> - If slot 1 is free, it uses slot 1</li>
+<li><strong>Only uses additional slots when needed</strong> - Slot 2 is only used when slot 1 is still displaying</li>
+<li><strong>Queues annotations when all slots are busy</strong> - Queued annotations display as soon as a slot clears</li>
 </ul>
-<p>For this to work:</p>
-<ol>
-<li>Create a scene named <code>popup-ai-overlay</code> (or set a different name via <code>POPUP_OVERLAY_SCENE_NAME</code>)</li>
-<li>Make sure the scene is selected when starting popup-ai</li>
-</ol>
-<div class="admonition note">
-<p class="admonition-title">Approximation</p>
-<p>Automatic source creation depends on OBS version and platform. If it fails, use manual setup below.</p>
+<p>This means:</p>
+<ul>
+<li><strong>1 slot</strong>: All annotations display one at a time, queued in order</li>
+<li><strong>2 slots</strong>: Up to 2 annotations can display simultaneously</li>
+<li><strong>3-4 slots</strong>: For high-frequency annotation scenarios</li>
+</ul>
+<div class="admonition tip">
+<p class="admonition-title">Start Simple</p>
+<p>Most users only need 1-2 slots. Start with one and add more if you find annotations are queuing too often.</p>
 </div>
-<h3 id="option-b-manual-setup">Option B: Manual Setup<a class="headerlink" href="#option-b-manual-setup" title="Permanent link">&para;</a></h3>
-<p>Create the text sources yourself for full control over positioning and styling.</p>
-<h4 id="step-1-create-a-scene">Step 1: Create a Scene<a class="headerlink" href="#step-1-create-a-scene" title="Permanent link">&para;</a></h4>
+<h3 id="step-1-create-a-scene">Step 1: Create a Scene<a class="headerlink" href="#step-1-create-a-scene" title="Permanent link">&para;</a></h3>
 <ol>
 <li>In <strong>Scenes</strong>, click <strong>+</strong> to add a new scene</li>
-<li>Name it <code>popup-ai-overlay</code></li>
+<li>Name it <code>popup-ai-overlay</code> (or set a different name via <code>POPUP_OVERLAY_SCENE_NAME</code>)</li>
 </ol>
-<h4 id="step-2-add-text-sources">Step 2: Add Text Sources<a class="headerlink" href="#step-2-add-text-sources" title="Permanent link">&para;</a></h4>
-<p>For each slot (1-4):</p>
+<h3 id="step-2-add-text-sources">Step 2: Add Text Sources<a class="headerlink" href="#step-2-add-text-sources" title="Permanent link">&para;</a></h3>
+<p>Create one or more text sources with this exact naming pattern:</p>
 <ol>
 <li>In <strong>Sources</strong>, click <strong>+</strong> → <strong>Text (GDI+)</strong> (Windows) or <strong>Text (FreeType 2)</strong> (macOS/Linux)</li>
-<li>Name it exactly: <code>popup-ai-slot-1</code> (then 2, 3, 4)</li>
+<li>Name it exactly: <code>popup-ai-slot-1</code></li>
 <li>Click <strong>OK</strong></li>
+<li>Repeat for additional slots: <code>popup-ai-slot-2</code>, <code>popup-ai-slot-3</code>, etc.</li>
 </ol>
-<h4 id="step-3-configure-text-properties">Step 3: Configure Text Properties<a class="headerlink" href="#step-3-configure-text-properties" title="Permanent link">&para;</a></h4>
+<div class="admonition warning">
+<p class="admonition-title">Naming Required</p>
+<p>Sources <strong>must</strong> be named exactly <code>popup-ai-slot-1</code>, <code>popup-ai-slot-2</code>, etc. popup-ai discovers these sources by name pattern matching.</p>
+</div>
+<h3 id="step-3-configure-text-properties">Step 3: Configure Text Properties<a class="headerlink" href="#step-3-configure-text-properties" title="Permanent link">&para;</a></h3>
 <p>For each text source:</p>
 <ol>
 <li><strong>Font</strong>: Choose a readable font (e.g., Arial, 24pt)</li>
@@ -2121,23 +2090,31 @@
 <li><strong>Outline</strong>: Optional, helps visibility</li>
 <li>Leave <strong>Text</strong> empty (popup-ai will fill it)</li>
 </ol>
-<h4 id="step-4-position-the-sources">Step 4: Position the Sources<a class="headerlink" href="#step-4-position-the-sources" title="Permanent link">&para;</a></h4>
-<p>Arrange the 4 text sources where you want annotations to appear:</p>
+<h3 id="step-4-position-the-sources">Step 4: Position the Sources<a class="headerlink" href="#step-4-position-the-sources" title="Permanent link">&para;</a></h3>
+<p>Position your text source(s) where you want annotations to appear:</p>
+<p><strong>Single slot (recommended for most users):</strong>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>┌─────────────────────────────────────┐
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>│                                     │
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>│  [slot-1]              [slot-2]     │
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>│         Your Stream Content         │
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>│                                     │
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>│         Your Stream Content         │
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>│  [slot-1 - lower third area]        │
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>│                                     │
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>│  [slot-3]              [slot-4]     │
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>│                                     │
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>└─────────────────────────────────────┘
-</span></code></pre></div>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>└─────────────────────────────────────┘
+</span></code></pre></div></p>
+<p><strong>Multiple slots (for simultaneous display):</strong>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>┌─────────────────────────────────────┐
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>│                                     │
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>│  [slot-1]              [slot-2]     │
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>│                                     │
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>│         Your Stream Content         │
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>│                                     │
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>└─────────────────────────────────────┘
+</span></code></pre></div></p>
 <div class="admonition tip">
 <p class="admonition-title">Positioning</p>
 <ul>
-<li>Corner positions work well for non-intrusive annotations</li>
-<li>Consider using lower-third style for educational content</li>
+<li>Lower-third positioning works well for educational content</li>
+<li>Corner positions are less intrusive</li>
 <li>Test visibility against your typical stream content</li>
 </ul>
 </div>
@@ -2184,7 +2161,7 @@
 <li>Set <strong>Service</strong> to <code>Custom...</code></li>
 <li>Set <strong>Server</strong> to:</li>
 </ol>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>srt://localhost:9998?mode=caller&amp;latency=200000
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>srt://localhost:9998?mode=caller&amp;latency=200000
 </span></code></pre></div>
 <ol>
 <li>Leave <strong>Stream Key</strong> empty</li>
@@ -2248,7 +2225,7 @@
 </div>
 <h2 id="part-4-testing-the-setup">Part 4: Testing the Setup<a class="headerlink" href="#part-4-testing-the-setup" title="Permanent link">&para;</a></h2>
 <h3 id="step-1-start-popup-ai">Step 1: Start popup-ai<a class="headerlink" href="#step-1-start-popup-ai" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>uv<span class="w"> </span>run<span class="w"> </span>popup-ai
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>uv<span class="w"> </span>run<span class="w"> </span>popup-ai
 </span></code></pre></div>
 <p>Wait for the admin UI to open at <code>http://127.0.0.1:8080</code>.</p>
 <h3 id="step-2-check-initial-state">Step 2: Check Initial State<a class="headerlink" href="#step-2-check-initial-state" title="Permanent link">&para;</a></h3>
@@ -2300,12 +2277,13 @@
 <li>[ ] WebSocket server enabled (Tools → WebSocket Server Settings)</li>
 <li>[ ] WebSocket password configured in popup-ai</li>
 <li>[ ] Scene <code>popup-ai-overlay</code> created</li>
-<li>[ ] Text sources <code>popup-ai-slot-1</code> through <code>popup-ai-slot-4</code> created</li>
-<li>[ ] Text sources positioned and styled</li>
+<li>[ ] At least one text source <code>popup-ai-slot-1</code> created (add more if needed)</li>
+<li>[ ] Text source(s) positioned and styled</li>
 <li>[ ] SRT stream configured (Custom service, srt://localhost:9998)</li>
 <li>[ ] Audio encoder set to AAC</li>
 <li>[ ] Audio sources active in mixer</li>
 <li>[ ] popup-ai can connect to OBS (Overlay actor green)</li>
+<li>[ ] Overlay status shows "discovered_slots: 1" (or more)</li>
 <li>[ ] Transcription working (text in Live Transcript)</li>
 <li>[ ] Annotations appearing in OBS</li>
 </ul>

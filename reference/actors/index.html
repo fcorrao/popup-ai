@@ -2372,26 +2372,27 @@
 <li><code>obs_password</code>: OBS WebSocket password</li>
 <li><code>scene_name</code>: Target OBS scene</li>
 <li><code>hold_duration_ms</code>: Display duration</li>
-<li><code>max_slots</code>: Number of overlay slots</li>
 </ul>
 <h3 id="data-flow_3">Data Flow<a class="headerlink" href="#data-flow_3" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>annotation_queue → Annotation → slot assignment → OBS WebSocket → text source update
 </span></code></pre></div>
 <h3 id="slot-management">Slot Management<a class="headerlink" href="#slot-management" title="Permanent link">&para;</a></h3>
 <ul>
-<li>4 slots available (configurable via <code>max_slots</code>)</li>
-<li>Round-robin assignment</li>
+<li><strong>Discovery-based</strong>: Discovers existing <code>popup-ai-slot-*</code> sources in OBS (no auto-creation)</li>
+<li><strong>Smart selection</strong>: Always uses the first available (invisible) slot</li>
+<li><strong>Queuing</strong>: Annotations queue when all slots are busy, display when slots clear</li>
 <li>Auto-hide after <code>hold_duration_ms</code></li>
 <li>Cleanup loop runs every 500ms</li>
 </ul>
 <h3 id="obs-sources">OBS Sources<a class="headerlink" href="#obs-sources" title="Permanent link">&para;</a></h3>
-<p>Creates text sources named:</p>
+<p>User must manually create text sources in OBS named:</p>
 <ul>
-<li><code>popup-ai-slot-1</code></li>
-<li><code>popup-ai-slot-2</code></li>
-<li><code>popup-ai-slot-3</code></li>
-<li><code>popup-ai-slot-4</code></li>
+<li><code>popup-ai-slot-1</code> (required)</li>
+<li><code>popup-ai-slot-2</code> (optional, for simultaneous display)</li>
+<li><code>popup-ai-slot-3</code> (optional)</li>
+<li>etc.</li>
 </ul>
+<p>The overlay actor discovers these sources by pattern matching and works with whatever slots exist.</p>
 <h3 id="stats_3">Stats<a class="headerlink" href="#stats_3" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -2410,8 +2411,20 @@
 <td>OBS connection status</td>
 </tr>
 <tr>
+<td><code>discovered_slots</code></td>
+<td>Number of discovered slot sources</td>
+</tr>
+<tr>
 <td><code>active_slots</code></td>
-<td>Currently active slots</td>
+<td>Currently displaying slots</td>
+</tr>
+<tr>
+<td><code>queued</code></td>
+<td>Annotations waiting for a free slot</td>
+</tr>
+<tr>
+<td><code>retry_count</code></td>
+<td>OBS reconnection attempts</td>
 </tr>
 <tr>
 <td><code>uptime_s</code></td>
@@ -2440,7 +2453,7 @@
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">term</span><span class="p">:</span> <span class="nb">str</span>                <span class="c1"># Extracted term</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">explanation</span><span class="p">:</span> <span class="nb">str</span>         <span class="c1"># Brief explanation</span>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">display_duration_ms</span><span class="p">:</span> <span class="nb">int</span> <span class="c1"># Display time (default: 5000)</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">slot</span><span class="p">:</span> <span class="nb">int</span>               <span class="c1"># Overlay slot (1-4)</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">slot</span><span class="p">:</span> <span class="nb">int</span>               <span class="c1"># Overlay slot number</span>
 </span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">timestamp_ms</span><span class="p">:</span> <span class="nb">int</span>       <span class="c1"># Generation timestamp</span>
 </span></code></pre></div>
 <h3 id="uievent">UIEvent<a class="headerlink" href="#uievent" title="Permanent link">&para;</a></h3>
