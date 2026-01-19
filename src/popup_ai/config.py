@@ -67,7 +67,7 @@ class OverlayConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="POPUP_OVERLAY_")
 
-    obs_host: str = Field(default="localhost", description="OBS WebSocket host")
+    obs_host: str = Field(default="100.126.180.24", description="OBS WebSocket host")
     obs_port: int = Field(default=4455, description="OBS WebSocket port")
     obs_password: str | None = Field(default=None, description="OBS WebSocket password")
     scene_name: str = Field(default="popup-ai-overlay", description="OBS scene name")
@@ -105,6 +105,11 @@ class PipelineConfig(BaseSettings):
     overlay_enabled: bool = Field(default=True, description="Enable overlay actor")
     headless: bool = Field(default=False, description="Run without UI")
     log_level: str = Field(default="INFO", description="Logging level")
+    ui_host: str = Field(
+        default="0.0.0.0",
+        description="Host for admin UI (0.0.0.0 for all interfaces)",
+    )
+    ui_port: int = Field(default=8080, description="Port for admin UI")
 
 
 class Settings(BaseSettings):

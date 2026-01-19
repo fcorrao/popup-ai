@@ -13,6 +13,7 @@ from ray.util.queue import Queue
 from popup_ai.audio.preprocessor import AudioPreprocessor
 from popup_ai.config import TranscriberConfig
 from popup_ai.messages import ActorStatus, AudioChunk, Transcript, TranscriptSegment, UIEvent
+from popup_ai.observability import ensure_logfire_configured
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ class TranscriberActor:
         if self._state == "running":
             return
 
+        ensure_logfire_configured()
         with logfire.span("transcriber.start"):
             self._logger.info("Starting transcriber actor")
             self._state = "starting"

@@ -185,11 +185,21 @@ def main(
 
     # Initialize Ray with dashboard and log_to_driver
     console.print("[bold blue]Initializing Ray...[/bold blue]")
+
+    # Forward important env vars to Ray workers
+    import os
+    env_vars = {}
+    for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY"]:
+        if key in os.environ:
+            env_vars[key] = os.environ[key]
+
     context = ray.init(
         ignore_reinit_error=True,
         logging_level=logging.INFO,
         log_to_driver=True,
         include_dashboard=True,
+        dashboard_host="0.0.0.0",
+        runtime_env={"env_vars": env_vars} if env_vars else None,
     )
 
     # Show dashboard URL

@@ -37,8 +37,8 @@ class PipelineUI:
         self.logfire_url = logfire_url
         self.supervisor: Any = None
         self.ui_queue: Any = None
-        self._status_timer: asyncio.Task | None = None
-        self._event_timer: asyncio.Task | None = None
+        self._status_timer: ui.timer | None = None
+        self._event_timer: ui.timer | None = None
 
         # UI state management
         self._state = UIState()
@@ -57,6 +57,10 @@ class PipelineUI:
 
     def build_ui(self) -> None:
         """Build the admin UI with tabs."""
+        # Create polling timers (inactive until pipeline starts)
+        self._status_timer = ui.timer(2.0, self._poll_status, active=False)
+        self._event_timer = ui.timer(0.1, self._poll_events, active=False)
+
         # Header
         with ui.header().classes("bg-primary"):
             ui.label("popup-ai Admin").classes("text-h5")
@@ -134,9 +138,11 @@ class PipelineUI:
                 self._pipeline_bar.set_running(True)
             ui.notify("Pipeline started", type="positive")
 
-            # Start polling tasks
-            self._status_timer = asyncio.create_task(self._poll_status())
-            self._event_timer = asyncio.create_task(self._poll_events())
+            # Activate polling timers
+            if self._status_timer:
+                self._status_timer.activate()
+            if self._event_timer:
+                self._event_timer.activate()
 
         except Exception as e:
             logger.exception("Failed to start pipeline")
@@ -152,11 +158,11 @@ class PipelineUI:
             if self.supervisor:
                 await self.supervisor.stop.remote()
 
-            # Cancel polling tasks
+            # Stop polling timers
             if self._status_timer:
-                self._status_timer.cancel()
+                self._status_timer.deactivate()
             if self._event_timer:
-                self._event_timer.cancel()
+                self._event_timer.deactivate()
 
             self._state.pipeline_running = False
             self._state.clear()
@@ -169,34 +175,29 @@ class PipelineUI:
             ui.notify(f"Failed to stop: {e}", type="negative")
 
     async def _poll_status(self) -> None:
-        """Poll actor status periodically."""
-        while True:
-            try:
-                if self.supervisor:
-                    statuses = await self.supervisor.get_status.remote()
-                    self._state.update_statuses(statuses)
-                    self._update_tabs(statuses)
-            except Exception as e:
-                logger.debug(f"Status poll failed: {e}")
-
-            await asyncio.sleep(2)
+        """Poll actor status (called by ui.timer)."""
+        try:
+            if self.supervisor:
+                statuses = await self.supervisor.get_status.remote()
+                self._state.update_statuses(statuses)
+                self._update_tabs(statuses)
+        except Exception as e:
+            logger.debug(f"Status poll failed: {e}")
 
     async def _poll_events(self) -> None:
-        """Poll UI events from actors."""
-        while True:
-            try:
-                if self.ui_queue:
-                    while True:
-                        try:
-                            event = self.ui_queue.get_nowait()
-                            if isinstance(event, UIEvent):
-                                self._handle_event(event)
-                        except Exception:
-                            break
-            except Exception as e:
-                logger.debug(f"Event poll failed: {e}")
-
-            await asyncio.sleep(0.1)
+        """Poll UI events from actors (called by ui.timer)."""
+        try:
+            if self.ui_queue:
+                # Drain all available events
+                for _ in range(100):  # Process up to 100 events per tick
+                    try:
+                        event = self.ui_queue.get_nowait()
+                        if isinstance(event, UIEvent):
+                            self._handle_event(event)
+                    except Exception:
+                        break
+        except Exception as e:
+            logger.debug(f"Event poll failed: {e}")
 
     def _handle_event(self, event: UIEvent) -> None:
         """Handle a UI event from an actor."""
@@ -248,12 +249,21 @@ def run_app(settings: Settings) -> None:
         )
         logfire_url = settings.logfire.dashboard_url
 
+    # Forward important env vars to Ray workers
+    import os
+    env_vars = {}
+    for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY"]:
+        if key in os.environ:
+            env_vars[key] = os.environ[key]
+
     # Initialize Ray with dashboard and log_to_driver for visibility
     context = ray.init(
         ignore_reinit_error=True,
         logging_level=logging.INFO,
         log_to_driver=True,
         include_dashboard=True,
+        dashboard_host="0.0.0.0",
+        runtime_env={"env_vars": env_vars} if env_vars else None,
     )
 
     # Get dashboard URL
@@ -276,8 +286,8 @@ def run_app(settings: Settings) -> None:
 
     ui.run(
         title="popup-ai Admin",
-        host="127.0.0.1",
-        port=8080,
+        host=settings.pipeline.ui_host,
+        port=settings.pipeline.ui_port,
         reload=False,
         show=True,
     )

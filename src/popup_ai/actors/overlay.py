@@ -3,7 +3,9 @@
 import asyncio
 import contextlib
 import logging
+import sys
 import time
+from io import StringIO
 
 import logfire
 import ray
@@ -11,8 +13,23 @@ from ray.util.queue import Queue
 
 from popup_ai.config import OverlayConfig
 from popup_ai.messages import ActorStatus, Annotation, UIEvent
+from popup_ai.observability import ensure_logfire_configured
 
 logger = logging.getLogger(__name__)
+
+# Suppress verbose obsws_python logging
+logging.getLogger("obsws_python").setLevel(logging.WARNING)
+
+
+@contextlib.contextmanager
+def suppress_stderr():
+    """Temporarily suppress stderr output (for noisy library exceptions)."""
+    old_stderr = sys.stderr
+    sys.stderr = StringIO()
+    try:
+        yield
+    finally:
+        sys.stderr = old_stderr
 
 
 @ray.remote
@@ -84,6 +101,7 @@ class OverlayActor:
         if self._state == "running":
             return
 
+        ensure_logfire_configured()
         with logfire.span("overlay.start"):
             self._logger.info("Starting overlay actor")
             self._state = "starting"
@@ -236,45 +254,118 @@ class OverlayActor:
                 self._logger.exception("Error in reconnect loop")
 
     async def _init_overlay_sources(self) -> None:
-        """Initialize OBS overlay text sources."""
+        """Initialize OBS overlay text sources.
+
+        Attempts to create text sources for overlay slots. Silently handles
+        cases where the scene doesn't exist or sources can't be created.
+        """
         if not self._obs_client:
             return
 
+        # First check if the target scene exists
+        try:
+            with suppress_stderr():
+                scenes = self._obs_client.get_scene_list()
+            scene_names = [s["sceneName"] for s in scenes.scenes]
+            if self.config.scene_name not in scene_names:
+                self._logger.warning(
+                    f"OBS scene '{self.config.scene_name}' not found. "
+                    f"Available scenes: {scene_names}. "
+                    "Overlay sources will not be created."
+                )
+                return
+        except Exception as e:
+            self._logger.warning(f"Could not verify OBS scene: {e}")
+            return
+
+        # Get list of existing sources in the scene
+        try:
+            with suppress_stderr():
+                scene_items = self._obs_client.get_scene_item_list(self.config.scene_name)
+            existing_sources = {item["sourceName"] for item in scene_items.scene_items}
+        except Exception as e:
+            self._logger.warning(f"Could not get scene items: {e}")
+            existing_sources = set()
+
         # Create text sources for each slot if they don't exist
+        created = 0
         for slot in range(1, self.config.max_slots + 1):
             source_name = f"popup-ai-slot-{slot}"
+            if source_name in existing_sources:
+                self._logger.debug(f"Source {source_name} already exists")
+            else:
+                if self._create_text_source(source_name):
+                    created += 1
+
+        if created > 0:
+            self._logger.info(f"Created {created} overlay text sources in OBS")
+        elif not existing_sources:
+            self._logger.warning(
+                "No overlay sources created. You may need to manually create "
+                f"text sources named 'popup-ai-slot-1' through 'popup-ai-slot-{self.config.max_slots}' "
+                f"in OBS scene '{self.config.scene_name}'"
+            )
+
+    def _get_available_text_input_kinds(self) -> list[str]:
+        """Get available text input kinds from OBS."""
+        if not self._obs_client:
+            return []
+
+        try:
+            with suppress_stderr():
+                result = self._obs_client.get_input_kind_list()
+            all_kinds = result.input_kinds
+
+            # Filter for text-related kinds
+            text_kinds = [k for k in all_kinds if "text" in k.lower()]
+            return text_kinds
+        except Exception as e:
+            self._logger.debug(f"Could not get input kinds: {e}")
+            return []
+
+    def _create_text_source(self, source_name: str) -> bool:
+        """Create a text source in OBS. Returns True if successful."""
+        if not self._obs_client:
+            return False
+
+        # First, try to get available text input kinds from OBS
+        available_kinds = self._get_available_text_input_kinds()
+        if available_kinds:
+            self._logger.debug(f"Available text input kinds: {available_kinds}")
+            input_kinds = available_kinds
+        else:
+            # Fallback to known text source types (varies by OS and OBS version)
+            # Windows: text_gdiplus_v2, text_gdiplus
+            # macOS/Linux: text_ft2_source_v2, text_ft2_source
+            input_kinds = [
+                "text_gdiplus_v2",
+                "text_gdiplus",
+                "text_ft2_source_v2",
+                "text_ft2_source",
+            ]
+
+        for input_kind in input_kinds:
             try:
-                # Check if source exists
-                self._obs_client.get_input_settings(source_name)
-            except Exception:
-                # Source doesn't exist, create it
-                self._logger.debug(f"Creating overlay source: {source_name}")
-                try:
+                with suppress_stderr():
                     self._obs_client.create_input(
                         self.config.scene_name,
                         source_name,
-                        "text_gdiplus_v2",  # Windows
-                        {
-                            "text": "",
-                            "font": {"face": "Arial", "size": 24},
-                        },
+                        input_kind,
+                        {"text": ""},
                         True,
                     )
-                except Exception:
-                    # Try macOS text source
-                    try:
-                        self._obs_client.create_input(
-                            self.config.scene_name,
-                            source_name,
-                            "text_ft2_source_v2",  # macOS/Linux
-                            {
-                                "text": "",
-                                "font": {"face": "Arial", "size": 24},
-                            },
-                            True,
-                        )
-                    except Exception as e:
-                        self._logger.warning(f"Failed to create source {source_name}: {e}")
+                self._logger.info(f"Created source {source_name} using {input_kind}")
+                return True
+            except Exception:
+                # Silently try next input kind
+                pass
+
+        self._logger.warning(
+            f"Could not create text source {source_name}. "
+            f"Tried input kinds: {input_kinds}. "
+            "You may need to create the sources manually in OBS."
+        )
+        return False
 
     async def _process_loop(self) -> None:
         """Main processing loop."""

@@ -14,7 +14,7 @@ from ray.util.queue import Queue
 
 from popup_ai.config import AnnotatorConfig
 from popup_ai.messages import ActorStatus, Annotation, Transcript, UIEvent
-from popup_ai.observability import get_metrics
+from popup_ai.observability import ensure_logfire_configured, get_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ class AnnotatorActor:
         if self._state == "running":
             return
 
+        ensure_logfire_configured()
         with logfire.span("annotator.start"):
             self._logger.info("Starting annotator actor")
             self._state = "starting"
@@ -82,6 +83,11 @@ class AnnotatorActor:
             try:
                 self._init_cache()
                 await self._init_agent()
+
+                # Warmup LLM connection
+                if self._agent:
+                    await self._warmup_llm()
+
                 self._state = "running"
                 self._running = True
                 self._start_time = time.time()
@@ -159,7 +165,7 @@ class AnnotatorActor:
 
             self._agent = Agent(
                 f"{self.config.provider}:{self.config.model}",
-                result_type=list[AnnotationResult],
+                output_type=list[AnnotationResult],
                 system_prompt=(
                     "You are a helpful assistant that extracts key terms from speech transcripts "
                     "and provides brief, educational explanations. Focus on technical terms, "
@@ -176,6 +182,21 @@ class AnnotatorActor:
             self._logger.warning(f"Failed to initialize LLM agent: {e}")
             self._logger.warning("Annotator will run in mock mode (no LLM calls)")
             self._agent = None
+
+    async def _warmup_llm(self) -> None:
+        """Warmup LLM connection with a simple test call."""
+        if not self._agent:
+            return
+
+        try:
+            self._logger.info("Warming up LLM connection...")
+            start_time = time.time()
+            result = await self._agent.run("Test: hello")
+            latency_ms = (time.time() - start_time) * 1000
+            self._logger.info(f"LLM warmup complete in {latency_ms:.0f}ms")
+        except Exception as e:
+            self._logger.warning(f"LLM warmup failed: {e}")
+            # Don't raise - allow annotator to start anyway, maybe network is temporarily down
 
     async def _process_loop(self) -> None:
         """Main processing loop."""
@@ -274,7 +295,7 @@ class AnnotatorActor:
                 metrics["llm_latency"].record(latency_ms)
 
             annotations = []
-            for item in result.data:
+            for item in result.output:
                 annotations.append((item.term, item.explanation))
             return annotations
 

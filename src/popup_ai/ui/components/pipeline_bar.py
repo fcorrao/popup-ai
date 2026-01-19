@@ -22,6 +22,8 @@ class PipelineBar:
         self._dashboard_url = dashboard_url
         self._logfire_url = logfire_url
         self._running = False
+        self._starting = False
+        self._stopping = False
         self._checkboxes: dict[str, ui.checkbox] = {}
         self._start_btn: ui.button | None = None
         self._stop_btn: ui.button | None = None
@@ -108,12 +110,37 @@ class PipelineBar:
 
     async def _handle_start(self) -> None:
         """Handle start button click."""
+        if self._starting or self._running:
+            return
+        self._starting = True
         if self._start_btn:
             self._start_btn.set_enabled(False)
-        await self._on_start()
+            self._start_btn.props("loading")
+            self._start_btn.text = "Starting..."
+        # Disable checkboxes while starting
+        for checkbox in self._checkboxes.values():
+            checkbox.set_enabled(False)
+        try:
+            await self._on_start()
+        finally:
+            self._starting = False
+            if self._start_btn:
+                self._start_btn.props(remove="loading")
+                self._start_btn.text = "Start"
 
     async def _handle_stop(self) -> None:
         """Handle stop button click."""
+        if self._stopping or not self._running:
+            return
+        self._stopping = True
         if self._stop_btn:
             self._stop_btn.set_enabled(False)
-        await self._on_stop()
+            self._stop_btn.props("loading")
+            self._stop_btn.text = "Stopping..."
+        try:
+            await self._on_stop()
+        finally:
+            self._stopping = False
+            if self._stop_btn:
+                self._stop_btn.props(remove="loading")
+                self._stop_btn.text = "Stop"

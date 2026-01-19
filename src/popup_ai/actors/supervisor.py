@@ -201,12 +201,15 @@ class PipelineSupervisor:
 
     async def get_status(self) -> dict[str, ActorStatus]:
         """Get status of all actors."""
+        self._logger.debug(f"get_status called, actors: {list(self._actors.keys())}")
         statuses = {}
         for name, actor in self._actors.items():
             try:
                 status = await actor.get_status.remote()
                 statuses[name] = status
-            except Exception:
+                self._logger.debug(f"  {name}: {status.state}")
+            except Exception as e:
+                self._logger.warning(f"Failed to get status for {name}: {e}")
                 statuses[name] = ActorStatus(
                     name=name,
                     state="unreachable",

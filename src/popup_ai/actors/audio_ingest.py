@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import shutil
+import socket
 import subprocess
 import time
 
@@ -13,6 +14,7 @@ from ray.util.queue import Queue
 
 from popup_ai.config import AudioIngestConfig
 from popup_ai.messages import ActorStatus, AudioChunk, UIEvent
+from popup_ai.observability import ensure_logfire_configured
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,98 @@ class FFmpegNotFoundError(Exception):
     """Raised when ffmpeg is not installed or not in PATH."""
 
     pass
+
+
+class PortInUseError(Exception):
+    """Raised when the SRT port is already in use."""
+
+    pass
+
+
+def is_port_available(port: int, udp: bool = True) -> bool:
+    """Check if a port is available for binding.
+
+    Args:
+        port: Port number to check
+        udp: If True, check UDP (for SRT). If False, check TCP.
+
+    Returns:
+        True if port is available, False if in use
+    """
+    sock_type = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
+    try:
+        with socket.socket(socket.AF_INET, sock_type) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", port))
+            return True
+    except OSError:
+        return False
+
+
+def kill_orphan_ffmpeg_on_port(port: int) -> bool:
+    """Kill any orphan ffmpeg processes listening on the specified port.
+
+    This handles cleanup when a previous popup-ai instance crashed without
+    properly terminating ffmpeg.
+
+    Args:
+        port: Port number to check
+
+    Returns:
+        True if a process was killed, False otherwise
+    """
+    import platform
+
+    try:
+        if platform.system() == "Darwin":
+            # macOS: use lsof to find process
+            result = subprocess.run(
+                ["lsof", "-t", "-i", f":{port}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    try:
+                        pid_int = int(pid.strip())
+                        # Verify it's ffmpeg before killing
+                        ps_result = subprocess.run(
+                            ["ps", "-p", str(pid_int), "-o", "comm="],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        if "ffmpeg" in ps_result.stdout.lower():
+                            logger.warning(
+                                f"Killing orphan ffmpeg process {pid_int} on port {port}"
+                            )
+                            subprocess.run(["kill", "-9", str(pid_int)], timeout=5)
+                            return True
+                    except (ValueError, subprocess.TimeoutExpired):
+                        continue
+        else:
+            # Linux: use ss or netstat
+            result = subprocess.run(
+                ["ss", "-tlnp", f"sport = :{port}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if "ffmpeg" in result.stdout:
+                # Extract PID from ss output
+                import re
+                match = re.search(r"pid=(\d+)", result.stdout)
+                if match:
+                    pid = int(match.group(1))
+                    logger.warning(f"Killing orphan ffmpeg process {pid} on port {port}")
+                    subprocess.run(["kill", "-9", str(pid)], timeout=5)
+                    return True
+    except Exception as e:
+        logger.debug(f"Could not check for orphan ffmpeg: {e}")
+
+    return False
 
 
 def check_ffmpeg_available() -> tuple[bool, str]:
@@ -134,6 +228,7 @@ class AudioIngestActor:
         if self._state == "running":
             return
 
+        ensure_logfire_configured()
         with logfire.span("audio_ingest.start"):
             self._logger.info("Starting audio ingest actor")
             self._state = "starting"
@@ -149,6 +244,31 @@ class AudioIngestActor:
                     "type": "ffmpeg_not_found",
                 })
                 raise FFmpegNotFoundError(self._error)
+
+            # Check port availability, try to clean up orphan ffmpeg if needed
+            if not is_port_available(self.config.srt_port):
+                self._logger.warning(
+                    f"Port {self.config.srt_port} is in use, checking for orphan ffmpeg..."
+                )
+                if kill_orphan_ffmpeg_on_port(self.config.srt_port):
+                    # Give the OS a moment to release the port
+                    await asyncio.sleep(0.5)
+
+                # Check again after cleanup attempt
+                if not is_port_available(self.config.srt_port):
+                    self._state = "error"
+                    self._error = (
+                        f"Port {self.config.srt_port} is already in use. "
+                        "Could not clean up orphan process. Check with: "
+                        f"lsof -i :{self.config.srt_port}"
+                    )
+                    self._logger.error(self._error)
+                    self._publish_ui_event("error", {
+                        "message": self._error,
+                        "type": "port_in_use",
+                        "port": self.config.srt_port,
+                    })
+                    raise PortInUseError(self._error)
 
             try:
                 await self._start_ffmpeg()
