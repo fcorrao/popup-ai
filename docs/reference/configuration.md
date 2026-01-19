@@ -104,7 +104,13 @@ Settings for the OBS WebSocket overlay actor.
 | `obs_password` | `POPUP_OVERLAY_OBS_PASSWORD` | str\|None | `None` | OBS WebSocket password |
 | `scene_name` | `POPUP_OVERLAY_SCENE_NAME` | str | `popup-ai-overlay` | OBS scene for overlays |
 | `hold_duration_ms` | `POPUP_OVERLAY_HOLD_DURATION_MS` | int | `5000` | How long to display each annotation |
-| `max_slots` | `POPUP_OVERLAY_MAX_SLOTS` | int | `4` | Number of overlay slots |
+
+#### Slot Discovery
+
+The overlay actor discovers text sources in OBS named `popup-ai-slot-1`, `popup-ai-slot-2`, etc. The number of available slots is determined by how many sources you create, not by configuration.
+
+- **Smart selection**: Always uses the first available slot (prefers reusing slot 1)
+- **Queuing**: When all slots are busy, annotations queue until a slot clears
 
 #### OBS WebSocket Setup
 
@@ -113,6 +119,7 @@ Settings for the OBS WebSocket overlay actor.
 3. Note the port (default: 4455)
 4. Set a password if desired
 5. Configure popup-ai with matching settings
+6. Create text sources named `popup-ai-slot-1`, `popup-ai-slot-2`, etc. in your overlay scene
 
 ### LogfireConfig
 

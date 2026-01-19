@@ -122,13 +122,15 @@ You should see:
 
 ![Pipeline Running](../assets/pipeline-running.png){ .screenshot }
 
-## Step 6: Check OBS Overlay
+## Step 6: Set Up OBS Overlay
 
-popup-ai creates text sources in OBS for displaying annotations:
+Create text sources in OBS for displaying annotations:
 
-- `popup-ai-slot-1` through `popup-ai-slot-4`
+1. In your `popup-ai-overlay` scene, add text sources named `popup-ai-slot-1`, `popup-ai-slot-2`, etc.
+2. popup-ai discovers these sources automatically and uses them to display annotations
+3. Start with 1-2 slots - most users don't need more
 
-Add these sources to your scene to see annotations on stream.
+See [OBS Setup](obs-setup.md) for detailed instructions.
 
 ## What's Next?
 

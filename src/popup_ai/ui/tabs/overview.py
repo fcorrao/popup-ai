@@ -56,6 +56,8 @@ class OverviewTab:
     def update(self, statuses: dict[str, ActorStatus]) -> None:
         """Update all status cards."""
         for name, status in statuses.items():
+            if status is None:
+                continue
             if name in self._cards:
                 self._cards[name].update(status)
 

@@ -201,13 +201,15 @@ class PipelineSupervisor:
 
     async def get_status(self) -> dict[str, ActorStatus]:
         """Get status of all actors."""
-        self._logger.debug(f"get_status called, actors: {list(self._actors.keys())}")
+        # Take a snapshot of actors to avoid "dictionary changed size during iteration"
+        actors_snapshot = dict(self._actors)
+        self._logger.debug(f"get_status called, actors: {list(actors_snapshot.keys())}")
         statuses = {}
-        for name, actor in self._actors.items():
+        for name, actor in actors_snapshot.items():
             try:
                 status = await actor.get_status.remote()
                 statuses[name] = status
-                self._logger.debug(f"  {name}: {status.state}")
+                self._logger.debug(f"  {name}: state={status.state}")
             except Exception as e:
                 self._logger.warning(f"Failed to get status for {name}: {e}")
                 statuses[name] = ActorStatus(
@@ -428,3 +430,59 @@ class PipelineSupervisor:
             return status.stats.get("obs_connected", False)
         except Exception:
             return False
+
+    async def overlay_inject_annotation(
+        self, term: str, explanation: str, duration_ms: int | None = None
+    ) -> bool:
+        """Inject a test annotation into the overlay queue.
+
+        This sends an Annotation through the normal processing flow, so it will
+        be displayed and then auto-cleared after the display duration.
+
+        Args:
+            term: The term to display
+            explanation: The explanation text
+            duration_ms: Display duration in ms (uses default if not specified)
+
+        Returns:
+            True if annotation was queued, False otherwise
+        """
+        if "overlay" not in self._actors:
+            self._logger.warning("Overlay actor not running")
+            return False
+
+        if "annotation" not in self._queues:
+            self._logger.warning("Annotation queue not available")
+            return False
+
+        try:
+            import time
+
+            annotation = Annotation(
+                term=term,
+                explanation=explanation,
+                display_duration_ms=duration_ms or self.settings.overlay.hold_duration_ms,
+                slot=1,  # Will be reassigned by overlay actor
+                timestamp_ms=int(time.time() * 1000),
+            )
+            self._queues["annotation"].put_nowait(annotation)
+            self._logger.debug(f"Injected test annotation: {term}")
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to inject annotation: {e}")
+            return False
+
+    def overlay_get_discovered_slots(self) -> list[int]:
+        """Get the list of discovered overlay slots.
+
+        Returns:
+            List of slot numbers, or empty list if overlay not running
+        """
+        if "overlay" not in self._actors:
+            return []
+
+        try:
+            import ray
+            return ray.get(self._actors["overlay"].get_discovered_slots.remote())
+        except Exception:
+            return []

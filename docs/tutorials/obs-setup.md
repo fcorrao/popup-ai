@@ -52,43 +52,43 @@ Or in the admin UI Settings panel under "OBS Overlay".
 
 ## Part 2: Scene and Source Setup
 
-popup-ai displays annotations using text sources in OBS. You can set these up manually for more control, or let popup-ai create them automatically.
+popup-ai displays annotations using text sources in OBS. You create these sources manually, giving you full control over positioning and styling.
 
-### Option A: Automatic Setup (Recommended)
+### How Slot Selection Works
 
-popup-ai attempts to create text sources automatically when the Overlay actor starts. It will create:
+popup-ai uses a smart slot selection system:
 
-- `popup-ai-slot-1`
-- `popup-ai-slot-2`
-- `popup-ai-slot-3`
-- `popup-ai-slot-4`
+- **Always prefers the first available slot** - If slot 1 is free, it uses slot 1
+- **Only uses additional slots when needed** - Slot 2 is only used when slot 1 is still displaying
+- **Queues annotations when all slots are busy** - Queued annotations display as soon as a slot clears
 
-For this to work:
+This means:
 
-1. Create a scene named `popup-ai-overlay` (or set a different name via `POPUP_OVERLAY_SCENE_NAME`)
-2. Make sure the scene is selected when starting popup-ai
+- **1 slot**: All annotations display one at a time, queued in order
+- **2 slots**: Up to 2 annotations can display simultaneously
+- **3-4 slots**: For high-frequency annotation scenarios
 
-!!! note "Approximation"
-    Automatic source creation depends on OBS version and platform. If it fails, use manual setup below.
+!!! tip "Start Simple"
+    Most users only need 1-2 slots. Start with one and add more if you find annotations are queuing too often.
 
-### Option B: Manual Setup
-
-Create the text sources yourself for full control over positioning and styling.
-
-#### Step 1: Create a Scene
+### Step 1: Create a Scene
 
 1. In **Scenes**, click **+** to add a new scene
-2. Name it `popup-ai-overlay`
+2. Name it `popup-ai-overlay` (or set a different name via `POPUP_OVERLAY_SCENE_NAME`)
 
-#### Step 2: Add Text Sources
+### Step 2: Add Text Sources
 
-For each slot (1-4):
+Create one or more text sources with this exact naming pattern:
 
 1. In **Sources**, click **+** → **Text (GDI+)** (Windows) or **Text (FreeType 2)** (macOS/Linux)
-2. Name it exactly: `popup-ai-slot-1` (then 2, 3, 4)
+2. Name it exactly: `popup-ai-slot-1`
 3. Click **OK**
+4. Repeat for additional slots: `popup-ai-slot-2`, `popup-ai-slot-3`, etc.
 
-#### Step 3: Configure Text Properties
+!!! warning "Naming Required"
+    Sources **must** be named exactly `popup-ai-slot-1`, `popup-ai-slot-2`, etc. popup-ai discovers these sources by name pattern matching.
+
+### Step 3: Configure Text Properties
 
 For each text source:
 
@@ -97,10 +97,22 @@ For each text source:
 3. **Outline**: Optional, helps visibility
 4. Leave **Text** empty (popup-ai will fill it)
 
-#### Step 4: Position the Sources
+### Step 4: Position the Sources
 
-Arrange the 4 text sources where you want annotations to appear:
+Position your text source(s) where you want annotations to appear:
 
+**Single slot (recommended for most users):**
+```
+┌─────────────────────────────────────┐
+│                                     │
+│         Your Stream Content         │
+│                                     │
+│  [slot-1 - lower third area]        │
+│                                     │
+└─────────────────────────────────────┘
+```
+
+**Multiple slots (for simultaneous display):**
 ```
 ┌─────────────────────────────────────┐
 │                                     │
@@ -108,14 +120,12 @@ Arrange the 4 text sources where you want annotations to appear:
 │                                     │
 │         Your Stream Content         │
 │                                     │
-│  [slot-3]              [slot-4]     │
-│                                     │
 └─────────────────────────────────────┘
 ```
 
 !!! tip "Positioning"
-    - Corner positions work well for non-intrusive annotations
-    - Consider using lower-third style for educational content
+    - Lower-third positioning works well for educational content
+    - Corner positions are less intrusive
     - Test visibility against your typical stream content
 
 ### Suggested Text Source Settings
@@ -216,12 +226,13 @@ Wait for the admin UI to open at `http://127.0.0.1:8080`.
 - [ ] WebSocket server enabled (Tools → WebSocket Server Settings)
 - [ ] WebSocket password configured in popup-ai
 - [ ] Scene `popup-ai-overlay` created
-- [ ] Text sources `popup-ai-slot-1` through `popup-ai-slot-4` created
-- [ ] Text sources positioned and styled
+- [ ] At least one text source `popup-ai-slot-1` created (add more if needed)
+- [ ] Text source(s) positioned and styled
 - [ ] SRT stream configured (Custom service, srt://localhost:9998)
 - [ ] Audio encoder set to AAC
 - [ ] Audio sources active in mixer
 - [ ] popup-ai can connect to OBS (Overlay actor green)
+- [ ] Overlay status shows "discovered_slots: 1" (or more)
 - [ ] Transcription working (text in Live Transcript)
 - [ ] Annotations appearing in OBS
 

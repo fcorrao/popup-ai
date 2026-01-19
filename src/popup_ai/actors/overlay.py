@@ -70,6 +70,7 @@ class OverlayActor:
 
         # Slot management - discovered from OBS, not auto-created
         self._discovered_slots: list[int] = []  # Sorted list of available slot numbers
+        self._slot_item_ids: dict[int, int] = {}  # slot -> OBS sceneItemId (for visibility control)
         self._active_slots: dict[int, dict] = {}  # slot -> {annotation, hide_at}
         self._annotation_queue: list[Annotation] = []  # Queue for when all slots are busy
 
@@ -263,11 +264,13 @@ class OverlayActor:
         """Discover existing OBS overlay text sources matching 'popup-ai-slot-*'.
 
         Does NOT auto-create sources. Works with whatever slots the user has created.
+        On discovery, all slots are hidden (visibility off) until an annotation is shown.
         """
         if not self._obs_client:
             return
 
         self._discovered_slots = []
+        self._slot_item_ids = {}
 
         # First check if the target scene exists
         try:
@@ -289,7 +292,11 @@ class OverlayActor:
         try:
             with suppress_stderr():
                 scene_items = self._obs_client.get_scene_item_list(self.config.scene_name)
-            existing_sources = {item["sourceName"] for item in scene_items.scene_items}
+            # Build a map of source name -> scene item id
+            source_to_item_id = {
+                item["sourceName"]: item["sceneItemId"]
+                for item in scene_items.scene_items
+            }
         except Exception as e:
             self._logger.warning(f"Could not get scene items: {e}")
             return
@@ -298,11 +305,12 @@ class OverlayActor:
         import re
         slot_pattern = re.compile(r"^popup-ai-slot-(\d+)$")
 
-        for source_name in existing_sources:
+        for source_name, item_id in source_to_item_id.items():
             match = slot_pattern.match(source_name)
             if match:
                 slot_num = int(match.group(1))
                 self._discovered_slots.append(slot_num)
+                self._slot_item_ids[slot_num] = item_id
 
         # Sort slots so we always use lower-numbered slots first
         self._discovered_slots.sort()
@@ -312,6 +320,10 @@ class OverlayActor:
                 f"Discovered {len(self._discovered_slots)} overlay slot(s): "
                 f"{['popup-ai-slot-' + str(s) for s in self._discovered_slots]}"
             )
+            # Hide all discovered slots on connection (they start invisible)
+            for slot in self._discovered_slots:
+                await self._set_slot_visible(slot, False)
+            self._logger.debug("All slots hidden on discovery")
         else:
             self._logger.warning(
                 f"No 'popup-ai-slot-*' sources found in scene '{self.config.scene_name}'. "
@@ -418,8 +430,35 @@ class OverlayActor:
         # Display in the selected slot
         await self._show_in_slot(slot, annotation)
 
+    async def _set_slot_visible(self, slot: int, visible: bool) -> None:
+        """Set visibility of a slot's OBS source.
+
+        Args:
+            slot: Slot number
+            visible: True to show, False to hide
+        """
+        if not self._obs_client or not self._obs_connected:
+            return
+
+        item_id = self._slot_item_ids.get(slot)
+        if item_id is None:
+            self._logger.warning(f"No scene item ID for slot {slot}, cannot set visibility")
+            return
+
+        try:
+            self._obs_client.set_scene_item_enabled(
+                scene_name=self.config.scene_name,
+                item_id=item_id,
+                enabled=visible,
+            )
+        except Exception as e:
+            self._handle_connection_error("set_visibility", e)
+
     async def _show_in_slot(self, slot: int, annotation: Annotation) -> None:
-        """Actually display an annotation in a specific slot."""
+        """Actually display an annotation in a specific slot.
+
+        Updates the text content AND makes the slot visible.
+        """
         text = f"{annotation.term}: {annotation.explanation}"
 
         # Store slot info
@@ -428,15 +467,18 @@ class OverlayActor:
             "hide_at": time.time() * 1000 + annotation.display_duration_ms,
         }
 
-        # Update OBS source
+        # Update OBS source text AND make visible
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
             try:
+                # Update the text content
                 self._obs_client.set_input_settings(
                     source_name,
                     {"text": text},
                     True,
                 )
+                # Make the slot visible
+                await self._set_slot_visible(slot, True)
             except Exception as e:
                 self._handle_connection_error("display_annotation", e)
 
@@ -449,22 +491,17 @@ class OverlayActor:
         self._logger.debug(f"Displayed annotation in slot {slot}: {annotation.term}")
 
     async def _clear_slot(self, slot: int) -> None:
-        """Clear a slot."""
-        if self._obs_client and self._obs_connected:
-            source_name = f"popup-ai-slot-{slot}"
-            try:
-                self._obs_client.set_input_settings(
-                    source_name,
-                    {"text": ""},
-                    True,
-                )
-            except Exception as e:
-                self._handle_connection_error("clear_slot", e)
+        """Hide a slot (does not clear text content).
 
+        The text remains in place but the element is made invisible.
+        This is more efficient than clearing text since we'll just
+        update the text and show again on next annotation.
+        """
+        await self._set_slot_visible(slot, False)
         self._publish_ui_event("clear", {"slot": slot})
 
     async def _clear_all_slots(self) -> None:
-        """Clear all discovered slots and the queue."""
+        """Hide all discovered slots and clear the queue."""
         for slot in self._discovered_slots:
             await self._clear_slot(slot)
         self._active_slots.clear()
@@ -491,6 +528,7 @@ class OverlayActor:
         """Send text directly to an OBS overlay slot.
 
         This bypasses the normal annotation flow and directly updates the OBS source.
+        Updates the text AND makes the slot visible.
 
         Args:
             slot: Slot number (must be one of the discovered slots)
@@ -508,11 +546,15 @@ class OverlayActor:
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
             try:
+                # Update text content
                 self._obs_client.set_input_settings(
                     source_name,
                     {"text": text},
                     True,
                 )
+                # Make the slot visible
+                await self._set_slot_visible(slot, True)
+
                 self._publish_ui_event("display", {
                     "slot": slot,
                     "term": text[:20] if len(text) > 20 else text,
@@ -529,7 +571,9 @@ class OverlayActor:
             return False
 
     async def clear_slot(self, slot: int) -> None:
-        """Clear a specific overlay slot (public wrapper).
+        """Hide a specific overlay slot (public wrapper).
+
+        Hides the slot (makes it invisible) and removes it from active tracking.
 
         Args:
             slot: Slot number (must be one of the discovered slots)
@@ -546,7 +590,7 @@ class OverlayActor:
             del self._active_slots[slot]
 
     async def clear_all(self) -> None:
-        """Clear all overlay slots (public wrapper)."""
+        """Hide all overlay slots (public wrapper)."""
         await self._clear_all_slots()
 
     async def reconnect(self) -> bool:
@@ -578,3 +622,11 @@ class OverlayActor:
             self._logger.error(f"OBS reconnection failed: {e}")
             self._publish_ui_event("reconnect_failed", {"error": str(e)})
             return False
+
+    def get_discovered_slots(self) -> list[int]:
+        """Get the list of discovered slot numbers.
+
+        Returns:
+            Sorted list of slot numbers (e.g., [1, 2, 3])
+        """
+        return list(self._discovered_slots)

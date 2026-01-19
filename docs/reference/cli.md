@@ -162,7 +162,8 @@ All configuration can be set via environment variables with the `POPUP_` prefix.
 | `POPUP_OVERLAY_OBS_PASSWORD` | (none) | OBS WebSocket password |
 | `POPUP_OVERLAY_SCENE_NAME` | `popup-ai-overlay` | OBS scene name |
 | `POPUP_OVERLAY_HOLD_DURATION_MS` | `5000` | Annotation display time |
-| `POPUP_OVERLAY_MAX_SLOTS` | `4` | Number of overlay slots |
+
+Slots are discovered from OBS, not configured. Create text sources named `popup-ai-slot-1`, `popup-ai-slot-2`, etc. in your OBS scene.
 
 ## Exit Codes
 

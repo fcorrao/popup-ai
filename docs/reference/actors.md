@@ -186,7 +186,6 @@ Uses `OverlayConfig`:
 - `obs_password`: OBS WebSocket password
 - `scene_name`: Target OBS scene
 - `hold_duration_ms`: Display duration
-- `max_slots`: Number of overlay slots
 
 ### Data Flow
 
@@ -196,19 +195,22 @@ annotation_queue → Annotation → slot assignment → OBS WebSocket → text s
 
 ### Slot Management
 
-- 4 slots available (configurable via `max_slots`)
-- Round-robin assignment
+- **Discovery-based**: Discovers existing `popup-ai-slot-*` sources in OBS (no auto-creation)
+- **Smart selection**: Always uses the first available (invisible) slot
+- **Queuing**: Annotations queue when all slots are busy, display when slots clear
 - Auto-hide after `hold_duration_ms`
 - Cleanup loop runs every 500ms
 
 ### OBS Sources
 
-Creates text sources named:
+User must manually create text sources in OBS named:
 
-- `popup-ai-slot-1`
-- `popup-ai-slot-2`
-- `popup-ai-slot-3`
-- `popup-ai-slot-4`
+- `popup-ai-slot-1` (required)
+- `popup-ai-slot-2` (optional, for simultaneous display)
+- `popup-ai-slot-3` (optional)
+- etc.
+
+The overlay actor discovers these sources by pattern matching and works with whatever slots exist.
 
 ### Stats
 
@@ -216,7 +218,10 @@ Creates text sources named:
 |------|-------------|
 | `annotations_displayed` | Total annotations shown |
 | `obs_connected` | OBS connection status |
-| `active_slots` | Currently active slots |
+| `discovered_slots` | Number of discovered slot sources |
+| `active_slots` | Currently displaying slots |
+| `queued` | Annotations waiting for a free slot |
+| `retry_count` | OBS reconnection attempts |
 | `uptime_s` | Actor uptime in seconds |
 
 ## Message Types
@@ -250,7 +255,7 @@ class Annotation(BaseModel):
     term: str                # Extracted term
     explanation: str         # Brief explanation
     display_duration_ms: int # Display time (default: 5000)
-    slot: int               # Overlay slot (1-4)
+    slot: int               # Overlay slot number
     timestamp_ms: int       # Generation timestamp
 ```
 

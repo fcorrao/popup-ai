@@ -1,12 +1,15 @@
 """UI state management with per-stage buffers."""
 
 import contextlib
+import logging
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from popup_ai.messages import ActorStatus, UIEvent
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
