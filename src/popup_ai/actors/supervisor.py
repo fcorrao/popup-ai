@@ -7,7 +7,7 @@ import logging
 import ray
 from ray.util.queue import Queue
 
-from popup_ai.config import Settings
+from popup_ai.config import AnnotatorConfig, Settings
 from popup_ai.messages import ActorStatus, Annotation, AudioChunk, Transcript
 
 logger = logging.getLogger(__name__)
@@ -234,6 +234,18 @@ class PipelineSupervisor:
     def configure(self, settings: Settings) -> None:
         """Update configuration (requires restart of affected actors)."""
         self.settings = settings
+
+    async def reconfigure_annotator(self, new_config: AnnotatorConfig) -> None:
+        """Reconfigure annotator without full restart.
+
+        Args:
+            new_config: New annotator configuration
+        """
+
+        self.settings.annotator = new_config
+        if "annotator" in self._actors:
+            await self._actors["annotator"].reconfigure.remote(new_config)
+            self._logger.info(f"Annotator reconfigured to {new_config.provider}:{new_config.model}")
 
     # ========== Test Injection Methods ==========
 

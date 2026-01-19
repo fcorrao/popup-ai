@@ -8,7 +8,7 @@ import ray
 from nicegui import app, ui
 
 from popup_ai.config import Settings
-from popup_ai.messages import ActorStatus, UIEvent
+from popup_ai.messages import UIEvent
 from popup_ai.ui.components.pipeline_bar import PipelineBar
 from popup_ai.ui.state import UIState
 from popup_ai.ui.tabs import (
@@ -254,7 +254,7 @@ def run_app(settings: Settings) -> None:
     # Forward important env vars to Ray workers
     import os
     env_vars = {}
-    for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY"]:
+    for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY", "LOCAL_LLM_API_KEY"]:
         if key in os.environ:
             env_vars[key] = os.environ[key]
 
@@ -277,7 +277,6 @@ def run_app(settings: Settings) -> None:
     pipeline_ui = PipelineUI(settings, dashboard_url, logfire_url)
 
     # Initialize supervisor upfront so it's ready when clients connect
-    import asyncio
 
     @app.on_startup
     async def startup():

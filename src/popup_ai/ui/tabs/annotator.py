@@ -5,7 +5,7 @@ from typing import Any
 
 from nicegui import ui
 
-from popup_ai.config import Settings
+from popup_ai.config import PROVIDER_MODELS, AnnotatorConfig, Settings
 from popup_ai.messages import UIEvent
 from popup_ai.ui.components.data_viewer import (
     DataViewer,
@@ -37,6 +37,14 @@ class AnnotatorTab:
         self._explanation_input: ui.textarea | None = None
         self._slot_select: ui.select | None = None
         self._annotation_status: ui.label | None = None
+        # Settings panel inputs
+        self._provider_select: ui.select | None = None
+        self._model_select: ui.select | None = None
+        self._base_url_input: ui.input | None = None
+        self._api_key_env_input: ui.input | None = None
+        self._prompt_textarea: ui.textarea | None = None
+        self._settings_status: ui.label | None = None
+        self._local_settings_container: ui.column | None = None
 
     def build(self) -> ui.column:
         """Build and return the annotator tab content."""
@@ -140,21 +148,71 @@ class AnnotatorTab:
 
             # Settings (collapsed)
             with ui.expansion("Annotator Settings", icon="settings").classes("w-full"):
-                with ui.column().classes("gap-2 p-2"):
-                    ui.input(
-                        "Provider",
-                        value=self._settings.annotator.provider,
-                        on_change=lambda e: setattr(
-                            self._settings.annotator, "provider", e.value
-                        ),
+                with ui.column().classes("gap-4 p-2 w-full"):
+                    # Provider selection
+                    with ui.row().classes("gap-4 w-full items-end"):
+                        self._provider_select = ui.select(
+                            label="Provider",
+                            options=list(PROVIDER_MODELS.keys()),
+                            value=self._settings.annotator.provider,
+                            on_change=self._handle_provider_change,
+                        ).classes("w-48")
+
+                        # Model selection with suggestions
+                        initial_models = PROVIDER_MODELS.get(
+                            self._settings.annotator.provider, []
+                        )
+                        self._model_select = ui.select(
+                            label="Model",
+                            options=initial_models,
+                            value=self._settings.annotator.model,
+                            with_input=True,
+                        ).classes("flex-1")
+
+                    # Local model settings (hidden by default)
+                    self._local_settings_container = ui.column().classes("gap-2 w-full")
+                    with self._local_settings_container:
+                        ui.label("Local Model Settings").classes("text-caption text-grey")
+                        with ui.row().classes("gap-4 w-full"):
+                            self._base_url_input = ui.input(
+                                label="Base URL",
+                                value=self._settings.annotator.base_url or "",
+                                placeholder="http://localhost:11434/v1",
+                            ).classes("flex-1")
+
+                            self._api_key_env_input = ui.input(
+                                label="API Key Env Var (optional)",
+                                value=self._settings.annotator.api_key_env_var or "",
+                                placeholder="LOCAL_LLM_API_KEY",
+                            ).classes("w-48")
+
+                    # Toggle local settings visibility
+                    self._local_settings_container.set_visibility(
+                        self._settings.annotator.provider == "openai_compatible"
                     )
-                    ui.input(
-                        "Model",
-                        value=self._settings.annotator.model,
-                        on_change=lambda e: setattr(
-                            self._settings.annotator, "model", e.value
-                        ),
-                    )
+
+                    # Prompt template
+                    ui.label("Prompt Template").classes("text-caption text-grey mt-2")
+                    self._prompt_textarea = ui.textarea(
+                        value=self._settings.annotator.prompt_template,
+                        placeholder="Enter prompt template with {text} placeholder...",
+                    ).classes("w-full").props("rows=3")
+
+                    # Action buttons
+                    with ui.row().classes("gap-2"):
+                        ui.button(
+                            "Apply Changes",
+                            on_click=self._handle_apply_settings,
+                            icon="check",
+                        ).props("color=primary")
+
+                        ui.button(
+                            "Reset to Defaults",
+                            on_click=self._handle_reset_settings,
+                            icon="refresh",
+                        ).props("color=secondary outline")
+
+                    self._settings_status = ui.label("").classes("text-caption")
 
         return container
 
@@ -268,3 +326,108 @@ class AnnotatorTab:
                     self._llm_calls_label.set_text(
                         f"LLM Calls: {stats.get('llm_calls', 0)}"
                     )
+
+    def _handle_provider_change(self, e: Any) -> None:
+        """Handle provider selection change."""
+        provider = e.value
+        if not self._model_select or not self._local_settings_container:
+            return
+
+        # Update model options based on provider
+        models = PROVIDER_MODELS.get(provider, [])
+        self._model_select.options = models
+        if models:
+            self._model_select.set_value(models[0])
+
+        # Show/hide local settings
+        self._local_settings_container.set_visibility(provider == "openai_compatible")
+
+    async def _handle_apply_settings(self) -> None:
+        """Apply settings changes and reconfigure annotator."""
+        if not self._supervisor_getter:
+            ui.notify("Pipeline not initialized", type="warning")
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            ui.notify("Pipeline not running", type="warning")
+            return
+
+        if not all([
+            self._provider_select,
+            self._model_select,
+            self._prompt_textarea,
+        ]):
+            return
+
+        try:
+            # Build new config
+            provider = self._provider_select.value
+            model = self._model_select.value
+            prompt = self._prompt_textarea.value
+
+            # Get local settings if applicable
+            base_url = None
+            api_key_env_var = None
+            if provider == "openai_compatible":
+                if self._base_url_input:
+                    base_url = self._base_url_input.value or None
+                if self._api_key_env_input:
+                    api_key_env_var = self._api_key_env_input.value or None
+
+            new_config = AnnotatorConfig(
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                api_key_env_var=api_key_env_var,
+                prompt_template=prompt,
+                cache_enabled=self._settings.annotator.cache_enabled,
+                cache_path=self._settings.annotator.cache_path,
+                max_tokens=self._settings.annotator.max_tokens,
+            )
+
+            # Reconfigure annotator
+            await supervisor.reconfigure_annotator.remote(new_config)
+
+            # Update local settings reference
+            self._settings.annotator = new_config
+
+            # Update LLM label
+            if hasattr(self, "_llm_label"):
+                self._llm_label.set_text(f"Provider: {provider}:{model}")
+
+            if self._settings_status:
+                self._settings_status.set_text(f"Applied: {provider}:{model}")
+
+            ui.notify(f"Annotator reconfigured to {provider}:{model}", type="positive")
+
+        except Exception as ex:
+            ui.notify(f"Failed to apply settings: {ex}", type="negative")
+            if self._settings_status:
+                self._settings_status.set_text(f"Error: {ex}")
+
+    def _handle_reset_settings(self) -> None:
+        """Reset settings to defaults."""
+        defaults = AnnotatorConfig()
+
+        if self._provider_select:
+            self._provider_select.set_value(defaults.provider)
+            # Trigger provider change to update model options
+            self._handle_provider_change(type("Event", (), {"value": defaults.provider})())
+
+        if self._model_select:
+            self._model_select.set_value(defaults.model)
+
+        if self._base_url_input:
+            self._base_url_input.set_value("")
+
+        if self._api_key_env_input:
+            self._api_key_env_input.set_value("")
+
+        if self._prompt_textarea:
+            self._prompt_textarea.set_value(defaults.prompt_template)
+
+        if self._settings_status:
+            self._settings_status.set_text("Reset to defaults (not yet applied)")
+
+        ui.notify("Settings reset to defaults. Click 'Apply Changes' to save.", type="info")

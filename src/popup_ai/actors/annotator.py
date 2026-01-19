@@ -7,9 +7,11 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 import logfire
 import ray
+from pydantic import BaseModel
 from ray.util.queue import Queue
 
 from popup_ai.config import AnnotatorConfig
@@ -19,14 +21,34 @@ from popup_ai.observability import ensure_logfire_configured, get_metrics
 logger = logging.getLogger(__name__)
 
 
+class AnnotationResult(BaseModel):
+    """A single annotation result from the LLM."""
+    term: str
+    explanation: str
+
+
+class AnnotationResponse(BaseModel):
+    """Response from the LLM containing annotations."""
+    annotations: list[AnnotationResult]
+
+
+SYSTEM_PROMPT = """You are a helpful assistant that extracts key terms from speech transcripts \
+and provides brief, educational explanations. Focus on technical terms, jargon, or concepts \
+that viewers might not understand.
+
+Keep explanations terse - readable in under 5 seconds. Return 1-3 annotations per transcript \
+depending on content. Return an empty annotations list if no terms warrant explanation."""
+
+
 @ray.remote
 class AnnotatorActor:
     """Actor that extracts terms and generates explanations using LLM.
 
     Features:
     - SQLite cache to avoid duplicate LLM calls
-    - pydantic-ai for structured LLM output
-    - Configurable provider and model
+    - pydantic-ai for structured LLM output with multiple providers
+    - Supports OpenAI, Anthropic, Cerebras, and OpenAI-compatible endpoints
+    - Runtime reconfiguration without restart
     """
 
     def __init__(
@@ -49,8 +71,8 @@ class AnnotatorActor:
         self._cache_hits = 0
         self._llm_calls = 0
         self._db_conn: sqlite3.Connection | None = None
-        self._agent = None
-        self._http_client = None  # Raw httpx client for LLM calls (workaround for Ray actor issues)
+        self._agent: Any = None
+        self._http_client: Any = None  # Custom httpx client for providers
         self._slot_counter = 0
         self._logger = logging.getLogger("popup_ai.actors.annotator")
 
@@ -91,7 +113,7 @@ class AnnotatorActor:
 
             try:
                 self._init_cache()
-                self._init_http_client()
+                self._init_agent()
 
                 # Warmup LLM connection
                 await self._warmup_llm()
@@ -132,7 +154,7 @@ class AnnotatorActor:
                 self._db_conn = None
 
             if self._http_client:
-                self._http_client.close()
+                await self._http_client.aclose()
                 self._http_client = None
 
             self._agent = None
@@ -165,50 +187,94 @@ class AnnotatorActor:
         self._db_conn.commit()
         self._logger.info(f"Cache initialized at {cache_path}")
 
-    def _init_http_client(self) -> None:
-        """Initialize httpx client for LLM calls.
+    def _init_agent(self) -> None:
+        """Initialize pydantic-ai agent for LLM calls."""
+        from pydantic_ai import Agent
 
-        Note: We use raw httpx instead of pydantic-ai/OpenAI SDK because the SDK
-        has connection issues when running inside Ray actor subprocesses. Raw httpx
-        works fine, so we make direct API calls.
-        """
-        import httpx
-        import os
-
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            self._logger.warning("OPENAI_API_KEY not set, annotator will use mock mode")
+        model = self._create_model()
+        if model is None:
+            self._logger.warning("No API key configured, annotator will use mock mode")
             return
 
-        self._http_client = httpx.Client(timeout=30.0, proxy=None)
-        self._logger.info(f"HTTP client initialized for {self.config.provider}:{self.config.model}")
+        self._agent = Agent(
+            model,
+            result_type=AnnotationResponse,
+            system_prompt=SYSTEM_PROMPT,
+        )
+        self._logger.info(f"Agent initialized for {self.config.provider}:{self.config.model}")
+
+    def _create_model(self) -> Any:
+        """Create model instance based on provider config."""
+        import os
+
+        import httpx
+
+        # Create async httpx client for providers that support it
+        self._http_client = httpx.AsyncClient(timeout=30.0)
+
+        if self.config.provider == "openai":
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            if not api_key:
+                return None
+            return f"openai:{self.config.model}"
+
+        elif self.config.provider == "anthropic":
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            if not api_key:
+                self._logger.warning("ANTHROPIC_API_KEY not set")
+                return None
+            from pydantic_ai.models.anthropic import AnthropicModel
+            return AnthropicModel(self.config.model)
+
+        elif self.config.provider == "cerebras":
+            api_key = os.environ.get("CEREBRAS_API_KEY", "")
+            if not api_key:
+                self._logger.warning("CEREBRAS_API_KEY not set")
+                return None
+            from pydantic_ai.models.openai import OpenAIModel
+            from pydantic_ai.providers.cerebras import CerebrasProvider
+            return OpenAIModel(
+                self.config.model,
+                provider=CerebrasProvider(http_client=self._http_client),
+            )
+
+        elif self.config.provider == "openai_compatible":
+            # For local models (Ollama, vLLM, etc.)
+            from pydantic_ai.models.openai import OpenAIModel
+            from pydantic_ai.providers.openai import OpenAIProvider
+
+            # Get API key from custom env var or default
+            api_key_var = self.config.api_key_env_var or "LOCAL_LLM_API_KEY"
+            api_key = os.environ.get(api_key_var, "")
+
+            base_url = self.config.base_url or "http://localhost:11434/v1"
+
+            return OpenAIModel(
+                self.config.model,
+                provider=OpenAIProvider(
+                    base_url=base_url,
+                    api_key=api_key or None,
+                    http_client=self._http_client,
+                ),
+            )
+
+        else:
+            self._logger.error(f"Unknown provider: {self.config.provider}")
+            return None
 
     async def _warmup_llm(self) -> None:
         """Warmup LLM connection with a simple test call."""
-        if not self._http_client:
+        if not self._agent:
             return
 
-        import os
         try:
             self._logger.info("Warming up LLM connection...")
             start_time = time.time()
 
-            resp = self._http_client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.config.model,
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 5,
-                },
-            )
-            resp.raise_for_status()
+            # Use a simple warmup prompt
+            await self._agent.run("Say 'ready' in one word.")
             latency_ms = (time.time() - start_time) * 1000
-            content = resp.json()["choices"][0]["message"]["content"]
-            self._logger.info(f"LLM warmup complete in {latency_ms:.0f}ms: {content}")
+            self._logger.info(f"LLM warmup complete in {latency_ms:.0f}ms")
         except Exception as e:
             self._logger.warning(f"LLM warmup failed: {e}")
             # Don't raise - allow annotator to start anyway, maybe network is temporarily down
@@ -293,49 +359,17 @@ class AnnotatorActor:
             self._logger.warning(f"Failed to cache annotation: {e}")
 
     async def _call_llm(self, text: str) -> list[tuple[str, str]]:
-        """Call LLM to extract annotations using raw httpx.
-
-        Note: We use raw httpx instead of pydantic-ai/OpenAI SDK because the SDK
-        has connection issues when running inside Ray actor subprocesses.
-        """
-        if not self._http_client:
+        """Call LLM to extract annotations using pydantic-ai agent."""
+        if not self._agent:
             # Mock mode - no API key configured
             return []
-
-        import os
-        import json
 
         try:
             prompt = self.config.prompt_template.format(text=text)
             start_time = time.time()
 
-            # System prompt for structured extraction
-            system_prompt = (
-                "You are a helpful assistant that extracts key terms from speech transcripts "
-                "and provides brief, educational explanations. Focus on technical terms, "
-                "jargon, or concepts that viewers might not understand. Keep explanations "
-                "concise (1-2 sentences max). "
-                "Respond with a JSON array of objects with 'term' and 'explanation' fields. "
-                "Example: [{\"term\": \"API\", \"explanation\": \"Application Programming Interface\"}]"
-            )
-
-            resp = self._http_client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.config.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": 500,
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            resp.raise_for_status()
+            # Use pydantic-ai agent for structured output
+            result = await self._agent.run(prompt)
             latency_ms = (time.time() - start_time) * 1000
 
             # Record metrics
@@ -343,20 +377,9 @@ class AnnotatorActor:
                 metrics["llm_calls"].add(1)
                 metrics["llm_latency"].record(latency_ms)
 
-            # Parse response
-            content = resp.json()["choices"][0]["message"]["content"]
-            try:
-                data = json.loads(content)
-                # Handle both array and object with array inside
-                items = data if isinstance(data, list) else data.get("annotations", data.get("terms", []))
-                annotations = []
-                for item in items:
-                    if isinstance(item, dict) and "term" in item and "explanation" in item:
-                        annotations.append((item["term"], item["explanation"]))
-                return annotations
-            except json.JSONDecodeError:
-                self._logger.warning(f"Failed to parse LLM response as JSON: {content[:100]}")
-                return []
+            # Extract annotations from structured response
+            annotations = [(a.term, a.explanation) for a in result.data.annotations]
+            return annotations
 
         except Exception:
             logfire.exception("LLM call failed")
@@ -402,3 +425,36 @@ class AnnotatorActor:
             self.ui_queue.put_nowait(event)
         except Exception:
             pass
+
+    async def reconfigure(self, new_config: AnnotatorConfig) -> None:
+        """Reconfigure with new settings, reinitialize agent if needed."""
+        needs_reinit = (
+            new_config.provider != self.config.provider or
+            new_config.model != self.config.model or
+            new_config.base_url != self.config.base_url or
+            new_config.prompt_template != self.config.prompt_template or
+            new_config.api_key_env_var != self.config.api_key_env_var
+        )
+
+        self.config = new_config
+
+        if needs_reinit and self._state == "running":
+            self._logger.info(f"Reinitializing agent for {new_config.provider}:{new_config.model}")
+
+            # Close existing http client
+            if self._http_client:
+                await self._http_client.aclose()
+                self._http_client = None
+
+            # Reinitialize agent
+            self._init_agent()
+
+            self._publish_ui_event("reconfigured", {
+                "provider": new_config.provider,
+                "model": new_config.model,
+            })
+            logfire.info(
+                "annotator reconfigured",
+                provider=new_config.provider,
+                model=new_config.model,
+            )

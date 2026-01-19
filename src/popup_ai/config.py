@@ -54,12 +54,24 @@ class AnnotatorConfig(BaseSettings):
 
     provider: str = Field(default="openai", description="LLM provider")
     model: str = Field(default="gpt-4o-mini", description="LLM model")
+    base_url: str | None = Field(default=None, description="Custom API URL for local models")
+    api_key_env_var: str | None = Field(default=None, description="Env var for API key")
+    max_tokens: int = Field(default=500, description="Max response tokens")
     cache_enabled: bool = Field(default=True, description="Enable SQLite cache")
     cache_path: Path = Field(default=Path("~/.popup-ai/cache.db"), description="Cache DB path")
     prompt_template: str = Field(
-        default="Extract key terms and provide brief explanations for: {text}",
+        default="Extract up to 3 key technical terms or concepts from this transcript with terse explanations: {text}",
         description="Prompt template for annotation",
     )
+
+
+# Model suggestions for each provider (used by UI)
+PROVIDER_MODELS: dict[str, list[str]] = {
+    "openai": ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
+    "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
+    "cerebras": ["llama3.1-8b", "llama3.1-70b"],
+    "openai_compatible": ["llama3.2", "mistral", "qwen2.5"],
+}
 
 
 class OverlayConfig(BaseSettings):
@@ -72,7 +84,23 @@ class OverlayConfig(BaseSettings):
     obs_password: str | None = Field(default=None, description="OBS WebSocket password")
     scene_name: str = Field(default="popup-ai-overlay", description="OBS scene name")
     hold_duration_ms: int = Field(default=5000, description="Annotation display duration")
-    max_slots: int = Field(default=4, description="Number of overlay slots")
+
+    # Scroll filter settings for horizontal scrolling text
+    scroll_filter_name: str = Field(
+        default="Scroll", description="Name of the scroll filter on each slot source"
+    )
+    scroll_viewport_width_px: int = Field(
+        default=400, description="Fallback viewport width if not discoverable from OBS"
+    )
+    scroll_char_width_px: float = Field(
+        default=12.0, description="Estimated pixels per character for text width calculation"
+    )
+    scroll_min_speed: float = Field(
+        default=50.0, description="Minimum scroll speed (pixels/second)"
+    )
+    scroll_max_speed: float = Field(
+        default=500.0, description="Maximum scroll speed (pixels/second)"
+    )
 
 
 class LogfireConfig(BaseSettings):

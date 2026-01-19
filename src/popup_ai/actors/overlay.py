@@ -71,6 +71,7 @@ class OverlayActor:
         # Slot management - discovered from OBS, not auto-created
         self._discovered_slots: list[int] = []  # Sorted list of available slot numbers
         self._slot_item_ids: dict[int, int] = {}  # slot -> OBS sceneItemId (for visibility control)
+        self._slot_widths: dict[int, float] = {}  # slot -> viewport width in pixels (for scroll calc)
         self._active_slots: dict[int, dict] = {}  # slot -> {annotation, hide_at}
         self._annotation_queue: list[Annotation] = []  # Queue for when all slots are busy
 
@@ -265,12 +266,14 @@ class OverlayActor:
 
         Does NOT auto-create sources. Works with whatever slots the user has created.
         On discovery, all slots are hidden (visibility off) until an annotation is shown.
+        Also discovers the width of each slot for scroll speed calculation.
         """
         if not self._obs_client:
             return
 
         self._discovered_slots = []
         self._slot_item_ids = {}
+        self._slot_widths = {}
 
         # First check if the target scene exists
         try:
@@ -320,8 +323,13 @@ class OverlayActor:
                 f"Discovered {len(self._discovered_slots)} overlay slot(s): "
                 f"{['popup-ai-slot-' + str(s) for s in self._discovered_slots]}"
             )
-            # Hide all discovered slots on connection (they start invisible)
+            # Get width of each slot for scroll speed calculation, and hide them
             for slot in self._discovered_slots:
+                item_id = self._slot_item_ids.get(slot)
+                if item_id:
+                    width = self._get_slot_width(item_id)
+                    self._slot_widths[slot] = width
+                    self._logger.debug(f"Slot {slot} width: {width}px")
                 await self._set_slot_visible(slot, False)
             self._logger.debug("All slots hidden on discovery")
         else:
@@ -454,12 +462,105 @@ class OverlayActor:
         except Exception as e:
             self._handle_connection_error("set_visibility", e)
 
+    def _get_slot_width(self, item_id: int) -> float:
+        """Get the width of a slot's source from OBS.
+
+        Uses GetSceneItemTransform to get the source bounds.
+        Falls back to config default if not discoverable.
+
+        Args:
+            item_id: The OBS scene item ID
+
+        Returns:
+            Width in pixels
+        """
+        if not self._obs_client or not self._obs_connected:
+            return self.config.scroll_viewport_width_px
+
+        try:
+            transform = self._obs_client.get_scene_item_transform(
+                scene_name=self.config.scene_name,
+                item_id=item_id,
+            )
+            # The transform has sourceWidth (base) and width (after scale)
+            # We want the displayed width
+            if hasattr(transform, "scene_item_transform"):
+                t = transform.scene_item_transform
+                # Try to get the bounded/cropped width first
+                width = t.get("width") or t.get("sourceWidth")
+                if width and width > 0:
+                    return float(width)
+        except Exception as e:
+            self._logger.debug(f"Could not get slot width from OBS: {e}")
+
+        return self.config.scroll_viewport_width_px
+
+    def _calculate_scroll_speed(self, text: str, viewport_width: float, duration_ms: int) -> float:
+        """Calculate the scroll speed needed for text to fully traverse the viewport.
+
+        The text needs to:
+        1. Enter from the right (travel = text_width to be fully visible)
+        2. Exit on the left (travel = viewport_width to fully exit)
+
+        Total travel = text_width + viewport_width
+        Speed = total_travel / duration
+
+        Args:
+            text: The text to display
+            viewport_width: Width of the visible area in pixels
+            duration_ms: How long the annotation will be visible
+
+        Returns:
+            Scroll speed in pixels per second, clamped to min/max config values
+        """
+        # Estimate text width based on character count
+        text_width = len(text) * self.config.scroll_char_width_px
+
+        # Total distance the text needs to travel
+        total_travel = text_width + viewport_width
+
+        # Calculate speed (pixels per second)
+        duration_s = duration_ms / 1000.0
+        if duration_s <= 0:
+            return self.config.scroll_min_speed
+
+        speed = total_travel / duration_s
+
+        # Clamp to configured min/max
+        speed = max(self.config.scroll_min_speed, min(speed, self.config.scroll_max_speed))
+
+        return speed
+
+    def _set_scroll_filter_speed(self, slot: int, speed: float) -> None:
+        """Update the scroll filter speed for a slot.
+
+        Args:
+            slot: Slot number
+            speed: Scroll speed in pixels per second (positive = scroll left)
+        """
+        if not self._obs_client or not self._obs_connected:
+            return
+
+        source_name = f"popup-ai-slot-{slot}"
+        try:
+            self._obs_client.set_source_filter_settings(
+                source_name=source_name,
+                filter_name=self.config.scroll_filter_name,
+                filter_settings={"speed_x": speed},
+                overlay=True,  # Merge with existing settings
+            )
+        except Exception as e:
+            # Filter might not exist - that's OK, just log debug
+            self._logger.debug(f"Could not set scroll filter for slot {slot}: {e}")
+
     async def _show_in_slot(self, slot: int, annotation: Annotation) -> None:
         """Actually display an annotation in a specific slot.
 
-        Updates the text content AND makes the slot visible.
+        Calculates scroll speed based on text length and duration,
+        updates the text content, sets scroll filter, and makes the slot visible.
         """
-        text = f"{annotation.term}: {annotation.explanation}"
+        # Prepend spaces so the first character doesn't scroll off immediately
+        text = f"    {annotation.term}: {annotation.explanation}"
 
         # Store slot info
         self._active_slots[slot] = {
@@ -471,6 +572,17 @@ class OverlayActor:
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
             try:
+                # Calculate scroll speed based on text length and duration
+                viewport_width = self._slot_widths.get(
+                    slot, self.config.scroll_viewport_width_px
+                )
+                scroll_speed = self._calculate_scroll_speed(
+                    text, viewport_width, annotation.display_duration_ms
+                )
+
+                # Set scroll filter speed before showing
+                self._set_scroll_filter_speed(slot, scroll_speed)
+
                 # Update the text content
                 self._obs_client.set_input_settings(
                     source_name,
@@ -479,6 +591,11 @@ class OverlayActor:
                 )
                 # Make the slot visible
                 await self._set_slot_visible(slot, True)
+
+                self._logger.debug(
+                    f"Slot {slot}: text={len(text)} chars, "
+                    f"viewport={viewport_width}px, speed={scroll_speed:.1f}px/s"
+                )
             except Exception as e:
                 self._handle_connection_error("display_annotation", e)
 
@@ -524,15 +641,16 @@ class OverlayActor:
 
     # ========== Public Methods for Direct Control ==========
 
-    async def send_text(self, slot: int, text: str) -> bool:
+    async def send_text(self, slot: int, text: str, duration_ms: int | None = None) -> bool:
         """Send text directly to an OBS overlay slot.
 
         This bypasses the normal annotation flow and directly updates the OBS source.
-        Updates the text AND makes the slot visible.
+        Calculates scroll speed, updates text, and makes the slot visible.
 
         Args:
             slot: Slot number (must be one of the discovered slots)
             text: Text to display
+            duration_ms: Optional duration for scroll speed calculation (defaults to config)
 
         Returns:
             True if text was sent successfully, False otherwise
@@ -545,11 +663,25 @@ class OverlayActor:
 
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
+            # Prepend spaces so the first character doesn't scroll off immediately
+            padded_text = f"    {text}"
             try:
+                # Calculate scroll speed based on text length (including padding)
+                viewport_width = self._slot_widths.get(
+                    slot, self.config.scroll_viewport_width_px
+                )
+                effective_duration = duration_ms or self.config.hold_duration_ms
+                scroll_speed = self._calculate_scroll_speed(
+                    padded_text, viewport_width, effective_duration
+                )
+
+                # Set scroll filter speed
+                self._set_scroll_filter_speed(slot, scroll_speed)
+
                 # Update text content
                 self._obs_client.set_input_settings(
                     source_name,
-                    {"text": text},
+                    {"text": padded_text},
                     True,
                 )
                 # Make the slot visible

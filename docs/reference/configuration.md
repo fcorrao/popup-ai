@@ -67,12 +67,15 @@ Settings for the mlx-whisper transcription actor.
 
 ### AnnotatorConfig
 
-Settings for the LLM annotation actor.
+Settings for the LLM annotation actor with multi-provider support.
 
 | Setting | Env Var | Type | Default | Description |
 |---------|---------|------|---------|-------------|
-| `provider` | `POPUP_ANNOTATOR_PROVIDER` | str | `openai` | LLM provider name |
+| `provider` | `POPUP_ANNOTATOR_PROVIDER` | str | `openai` | LLM provider: `openai`, `anthropic`, `cerebras`, `openai_compatible` |
 | `model` | `POPUP_ANNOTATOR_MODEL` | str | `gpt-4o-mini` | LLM model name |
+| `base_url` | `POPUP_ANNOTATOR_BASE_URL` | str\|None | `None` | Custom API URL for `openai_compatible` provider |
+| `api_key_env_var` | `POPUP_ANNOTATOR_API_KEY_ENV_VAR` | str\|None | `None` | Custom env var for API key (for `openai_compatible`) |
+| `max_tokens` | `POPUP_ANNOTATOR_MAX_TOKENS` | int | `500` | Maximum response tokens |
 | `cache_enabled` | `POPUP_ANNOTATOR_CACHE_ENABLED` | bool | `true` | Enable SQLite result cache |
 | `cache_path` | `POPUP_ANNOTATOR_CACHE_PATH` | Path | `~/.popup-ai/cache.db` | Path to cache database |
 | `prompt_template` | `POPUP_ANNOTATOR_PROMPT_TEMPLATE` | str | (see below) | Prompt template |
@@ -83,15 +86,41 @@ Settings for the LLM annotation actor.
 Extract key terms and provide brief explanations for: {text}
 ```
 
-#### Provider Configuration
+#### Supported Providers
 
-The annotator uses pydantic-ai. Configure provider credentials via standard environment variables:
+The annotator uses pydantic-ai for multi-provider LLM support. Configure provider credentials via environment variables:
 
-| Provider | Credential Variable |
-|----------|---------------------|
-| OpenAI | `OPENAI_API_KEY` |
-| Anthropic | `ANTHROPIC_API_KEY` |
-| Google | `GOOGLE_API_KEY` |
+| Provider | Credential Variable | Example Models |
+|----------|---------------------|----------------|
+| `openai` | `OPENAI_API_KEY` | `gpt-4o-mini`, `gpt-4o`, `gpt-4-turbo` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-20241022` |
+| `cerebras` | `CEREBRAS_API_KEY` | `llama3.1-8b`, `llama3.1-70b` |
+| `openai_compatible` | `LOCAL_LLM_API_KEY` (optional) | `llama3.2`, `mistral`, `qwen2.5` |
+
+#### Local Model Setup (Ollama Example)
+
+To use local models via Ollama:
+
+1. Install and start Ollama: `ollama serve`
+2. Pull a model: `ollama pull llama3.2`
+3. Configure popup-ai:
+
+```bash
+export POPUP_ANNOTATOR_PROVIDER="openai_compatible"
+export POPUP_ANNOTATOR_MODEL="llama3.2"
+export POPUP_ANNOTATOR_BASE_URL="http://localhost:11434/v1"
+```
+
+Or configure via the Admin UI under Annotator → Settings.
+
+#### Runtime Reconfiguration
+
+The annotator supports runtime reconfiguration without requiring a full restart. Use the Admin UI's Annotator Settings panel to:
+
+1. Change provider and model
+2. Configure local model endpoints
+3. Edit the prompt template
+4. Apply changes instantly
 
 ### OverlayConfig
 
