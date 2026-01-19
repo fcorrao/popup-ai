@@ -38,9 +38,9 @@ class OverviewTab:
 
         return container
 
-    @ui.refreshable
+    @ui.refreshable_method
     def _render_summary(self) -> None:
-        """Render the summary stats. Decorated with @ui.refreshable for updates."""
+        """Render the summary stats. Decorated with @ui.refreshable_method for updates."""
         stats = self._state.get_overview_stats()
         with ui.row().classes("gap-4 mt-2"):
             ui.label(f"Stages Running: {stats['stages_running']}").classes(

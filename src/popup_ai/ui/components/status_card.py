@@ -27,7 +27,7 @@ class StatusCard:
             self._render_content()
         return card
 
-    @ui.refreshable
+    @ui.refreshable_method
     def _render_content(self) -> None:
         """Render the card content. Decorated with @ui.refreshable for updates."""
         with ui.row().classes("items-center w-full"):

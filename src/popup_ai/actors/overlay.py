@@ -66,8 +66,12 @@ class OverlayActor:
         self._annotations_displayed = 0
         self._obs_client = None
         self._obs_connected = False
-        self._slots: dict[int, dict] = {}  # slot -> {annotation, hide_at}
         self._logger = logging.getLogger("popup_ai.actors.overlay")
+
+        # Slot management - discovered from OBS, not auto-created
+        self._discovered_slots: list[int] = []  # Sorted list of available slot numbers
+        self._active_slots: dict[int, dict] = {}  # slot -> {annotation, hide_at}
+        self._annotation_queue: list[Annotation] = []  # Queue for when all slots are busy
 
         # Reconnection state
         self._retry_count = 0
@@ -80,7 +84,9 @@ class OverlayActor:
         stats = {
             "annotations_displayed": self._annotations_displayed,
             "obs_connected": self._obs_connected,
-            "active_slots": len(self._slots),
+            "discovered_slots": len(self._discovered_slots),
+            "active_slots": len(self._active_slots),
+            "queued": len(self._annotation_queue),
             "retry_count": self._retry_count,
         }
         if self._start_time:
@@ -217,8 +223,8 @@ class OverlayActor:
                 "port": self.config.obs_port,
             })
 
-            # Initialize overlay sources if needed
-            await self._init_overlay_sources()
+            # Discover existing overlay sources (no auto-creation)
+            await self._discover_overlay_sources()
 
         except ImportError:
             self._logger.warning("obsws-python not installed, overlay will use mock mode")
@@ -253,14 +259,15 @@ class OverlayActor:
             except Exception:
                 self._logger.exception("Error in reconnect loop")
 
-    async def _init_overlay_sources(self) -> None:
-        """Initialize OBS overlay text sources.
+    async def _discover_overlay_sources(self) -> None:
+        """Discover existing OBS overlay text sources matching 'popup-ai-slot-*'.
 
-        Attempts to create text sources for overlay slots. Silently handles
-        cases where the scene doesn't exist or sources can't be created.
+        Does NOT auto-create sources. Works with whatever slots the user has created.
         """
         if not self._obs_client:
             return
+
+        self._discovered_slots = []
 
         # First check if the target scene exists
         try:
@@ -271,7 +278,7 @@ class OverlayActor:
                 self._logger.warning(
                     f"OBS scene '{self.config.scene_name}' not found. "
                     f"Available scenes: {scene_names}. "
-                    "Overlay sources will not be created."
+                    "No overlay sources will be used."
                 )
                 return
         except Exception as e:
@@ -285,87 +292,32 @@ class OverlayActor:
             existing_sources = {item["sourceName"] for item in scene_items.scene_items}
         except Exception as e:
             self._logger.warning(f"Could not get scene items: {e}")
-            existing_sources = set()
+            return
 
-        # Create text sources for each slot if they don't exist
-        created = 0
-        for slot in range(1, self.config.max_slots + 1):
-            source_name = f"popup-ai-slot-{slot}"
-            if source_name in existing_sources:
-                self._logger.debug(f"Source {source_name} already exists")
-            else:
-                if self._create_text_source(source_name):
-                    created += 1
+        # Find sources matching 'popup-ai-slot-*' pattern
+        import re
+        slot_pattern = re.compile(r"^popup-ai-slot-(\d+)$")
 
-        if created > 0:
-            self._logger.info(f"Created {created} overlay text sources in OBS")
-        elif not existing_sources:
-            self._logger.warning(
-                "No overlay sources created. You may need to manually create "
-                f"text sources named 'popup-ai-slot-1' through 'popup-ai-slot-{self.config.max_slots}' "
-                f"in OBS scene '{self.config.scene_name}'"
+        for source_name in existing_sources:
+            match = slot_pattern.match(source_name)
+            if match:
+                slot_num = int(match.group(1))
+                self._discovered_slots.append(slot_num)
+
+        # Sort slots so we always use lower-numbered slots first
+        self._discovered_slots.sort()
+
+        if self._discovered_slots:
+            self._logger.info(
+                f"Discovered {len(self._discovered_slots)} overlay slot(s): "
+                f"{['popup-ai-slot-' + str(s) for s in self._discovered_slots]}"
             )
-
-    def _get_available_text_input_kinds(self) -> list[str]:
-        """Get available text input kinds from OBS."""
-        if not self._obs_client:
-            return []
-
-        try:
-            with suppress_stderr():
-                result = self._obs_client.get_input_kind_list()
-            all_kinds = result.input_kinds
-
-            # Filter for text-related kinds
-            text_kinds = [k for k in all_kinds if "text" in k.lower()]
-            return text_kinds
-        except Exception as e:
-            self._logger.debug(f"Could not get input kinds: {e}")
-            return []
-
-    def _create_text_source(self, source_name: str) -> bool:
-        """Create a text source in OBS. Returns True if successful."""
-        if not self._obs_client:
-            return False
-
-        # First, try to get available text input kinds from OBS
-        available_kinds = self._get_available_text_input_kinds()
-        if available_kinds:
-            self._logger.debug(f"Available text input kinds: {available_kinds}")
-            input_kinds = available_kinds
         else:
-            # Fallback to known text source types (varies by OS and OBS version)
-            # Windows: text_gdiplus_v2, text_gdiplus
-            # macOS/Linux: text_ft2_source_v2, text_ft2_source
-            input_kinds = [
-                "text_gdiplus_v2",
-                "text_gdiplus",
-                "text_ft2_source_v2",
-                "text_ft2_source",
-            ]
-
-        for input_kind in input_kinds:
-            try:
-                with suppress_stderr():
-                    self._obs_client.create_input(
-                        self.config.scene_name,
-                        source_name,
-                        input_kind,
-                        {"text": ""},
-                        True,
-                    )
-                self._logger.info(f"Created source {source_name} using {input_kind}")
-                return True
-            except Exception:
-                # Silently try next input kind
-                pass
-
-        self._logger.warning(
-            f"Could not create text source {source_name}. "
-            f"Tried input kinds: {input_kinds}. "
-            "You may need to create the sources manually in OBS."
-        )
-        return False
+            self._logger.warning(
+                f"No 'popup-ai-slot-*' sources found in scene '{self.config.scene_name}'. "
+                "Please create text sources named 'popup-ai-slot-1', 'popup-ai-slot-2', etc. "
+                "in OBS to enable overlay functionality."
+            )
 
     async def _process_loop(self) -> None:
         """Main processing loop."""
@@ -396,31 +348,82 @@ class OverlayActor:
                 await asyncio.sleep(0.1)
 
     async def _cleanup_loop(self) -> None:
-        """Loop to clean up expired annotations."""
+        """Loop to clean up expired annotations and process queue."""
         while self._running:
             try:
                 await asyncio.sleep(0.5)
                 now = time.time() * 1000
 
                 # Check for expired slots
-                expired = [slot for slot, info in self._slots.items() if info["hide_at"] <= now]
+                expired = [
+                    slot for slot, info in self._active_slots.items()
+                    if info["hide_at"] <= now
+                ]
 
                 for slot in expired:
                     await self._clear_slot(slot)
-                    del self._slots[slot]
+                    del self._active_slots[slot]
+
+                    # Check queue and display next annotation if available
+                    if self._annotation_queue:
+                        next_annotation = self._annotation_queue.pop(0)
+                        self._logger.debug(
+                            f"Slot {slot} freed, displaying queued annotation: {next_annotation.term}"
+                        )
+                        await self._show_in_slot(slot, next_annotation)
 
             except asyncio.CancelledError:
                 break
             except Exception:
                 self._logger.exception("Error in cleanup loop")
 
+    def _get_first_available_slot(self) -> int | None:
+        """Get the first slot that is not currently displaying.
+
+        Always prefers the lowest-numbered available slot.
+        Returns None if all slots are busy.
+        """
+        for slot in self._discovered_slots:
+            if slot not in self._active_slots:
+                return slot
+        return None
+
     async def _display_annotation(self, annotation: Annotation) -> None:
-        """Display an annotation in the appropriate slot."""
-        slot = annotation.slot
+        """Display an annotation using smart slot selection.
+
+        - Always uses the first available (invisible) slot
+        - Queues annotation if all slots are busy
+        - Does not use round-robin; prefers reusing slot 1 when possible
+        """
+        if not self._discovered_slots:
+            self._logger.warning("No overlay slots available, cannot display annotation")
+            return
+
+        # Find first available slot
+        slot = self._get_first_available_slot()
+
+        if slot is None:
+            # All slots are busy - queue the annotation
+            self._annotation_queue.append(annotation)
+            self._logger.debug(
+                f"All {len(self._discovered_slots)} slot(s) busy, "
+                f"queued annotation: {annotation.term} (queue size: {len(self._annotation_queue)})"
+            )
+            self._publish_ui_event("queued", {
+                "term": annotation.term,
+                "queue_size": len(self._annotation_queue),
+            })
+            return
+
+        # Display in the selected slot
+        await self._show_in_slot(slot, annotation)
+
+    async def _show_in_slot(self, slot: int, annotation: Annotation) -> None:
+        """Actually display an annotation in a specific slot."""
         text = f"{annotation.term}: {annotation.explanation}"
 
         # Store slot info
-        self._slots[slot] = {
+        self._active_slots[slot] = {
             "annotation": annotation,
             "hide_at": time.time() * 1000 + annotation.display_duration_ms,
         }
@@ -461,10 +464,11 @@ class OverlayActor:
         self._publish_ui_event("clear", {"slot": slot})
 
     async def _clear_all_slots(self) -> None:
-        """Clear all slots."""
-        for slot in range(1, self.config.max_slots + 1):
+        """Clear all discovered slots and the queue."""
+        for slot in self._discovered_slots:
             await self._clear_slot(slot)
-        self._slots.clear()
+        self._active_slots.clear()
+        self._annotation_queue.clear()
 
     def _publish_ui_event(self, event_type: str, data: dict) -> None:
         """Publish an event to the UI queue."""
@@ -489,14 +493,16 @@ class OverlayActor:
         This bypasses the normal annotation flow and directly updates the OBS source.
 
         Args:
-            slot: Slot number (1-4)
+            slot: Slot number (must be one of the discovered slots)
             text: Text to display
 
         Returns:
             True if text was sent successfully, False otherwise
         """
-        if not (1 <= slot <= self.config.max_slots):
-            self._logger.warning(f"Invalid slot {slot}, must be 1-{self.config.max_slots}")
+        if slot not in self._discovered_slots:
+            self._logger.warning(
+                f"Slot {slot} not available. Discovered slots: {self._discovered_slots}"
+            )
             return False
 
         if self._obs_client and self._obs_connected:
@@ -526,16 +532,18 @@ class OverlayActor:
         """Clear a specific overlay slot (public wrapper).
 
         Args:
-            slot: Slot number (1-4)
+            slot: Slot number (must be one of the discovered slots)
         """
-        if not (1 <= slot <= self.config.max_slots):
-            self._logger.warning(f"Invalid slot {slot}, must be 1-{self.config.max_slots}")
+        if slot not in self._discovered_slots:
+            self._logger.warning(
+                f"Slot {slot} not available. Discovered slots: {self._discovered_slots}"
+            )
             return
 
         await self._clear_slot(slot)
         # Remove from tracking if present
-        if slot in self._slots:
-            del self._slots[slot]
+        if slot in self._active_slots:
+            del self._active_slots[slot]
 
     async def clear_all(self) -> None:
         """Clear all overlay slots (public wrapper)."""
