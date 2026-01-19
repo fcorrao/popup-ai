@@ -198,7 +198,7 @@ class AnnotatorActor:
 
         self._agent = Agent(
             model,
-            result_type=AnnotationResponse,
+            output_type=AnnotationResponse,
             system_prompt=SYSTEM_PROMPT,
         )
         self._logger.info(f"Agent initialized for {self.config.provider}:{self.config.model}")
