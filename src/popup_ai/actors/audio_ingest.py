@@ -339,6 +339,7 @@ class AudioIngestActor:
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "info",  # Use info level for more diagnostic output
+            "-threads", str(self.config.ffmpeg_threads),
             "-i", srt_url,
             "-vn",  # No video
             "-acodec", "pcm_s16le",

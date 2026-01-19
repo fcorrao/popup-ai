@@ -19,6 +19,7 @@ class AudioIngestConfig(BaseSettings):
     sample_rate: int = Field(default=16000, description="Audio sample rate in Hz")
     channels: int = Field(default=1, description="Number of audio channels")
     chunk_duration_ms: int = Field(default=100, description="Audio chunk duration in ms")
+    ffmpeg_threads: int = Field(default=4, description="FFmpeg thread count (limits CPU usage)")
 
 
 class TranscriberConfig(BaseSettings):
