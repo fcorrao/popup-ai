@@ -50,6 +50,7 @@ class AnnotatorActor:
         self._llm_calls = 0
         self._db_conn: sqlite3.Connection | None = None
         self._agent = None
+        self._http_client = None  # Raw httpx client for LLM calls (workaround for Ray actor issues)
         self._slot_counter = 0
         self._logger = logging.getLogger("popup_ai.actors.annotator")
 
@@ -77,16 +78,23 @@ class AnnotatorActor:
         ensure_logfire_configured()
         with logfire.span("annotator.start"):
             self._logger.info("Starting annotator actor")
+            import os
+
+            # Clear proxy env vars - httpx in Ray actors has issues with proxies
+            os.environ['HTTP_PROXY'] = ''
+            os.environ['HTTPS_PROXY'] = ''
+            os.environ['http_proxy'] = ''
+            os.environ['https_proxy'] = ''
+
             self._state = "starting"
             self._error = None
 
             try:
                 self._init_cache()
-                await self._init_agent()
+                self._init_http_client()
 
                 # Warmup LLM connection
-                if self._agent:
-                    await self._warmup_llm()
+                await self._warmup_llm()
 
                 self._state = "running"
                 self._running = True
@@ -123,6 +131,10 @@ class AnnotatorActor:
                 self._db_conn.close()
                 self._db_conn = None
 
+            if self._http_client:
+                self._http_client.close()
+                self._http_client = None
+
             self._agent = None
             self._state = "stopped"
             self._start_time = None
@@ -153,47 +165,50 @@ class AnnotatorActor:
         self._db_conn.commit()
         self._logger.info(f"Cache initialized at {cache_path}")
 
-    async def _init_agent(self) -> None:
-        """Initialize pydantic-ai agent."""
-        try:
-            from pydantic import BaseModel
-            from pydantic_ai import Agent
+    def _init_http_client(self) -> None:
+        """Initialize httpx client for LLM calls.
 
-            class AnnotationResult(BaseModel):
-                term: str
-                explanation: str
+        Note: We use raw httpx instead of pydantic-ai/OpenAI SDK because the SDK
+        has connection issues when running inside Ray actor subprocesses. Raw httpx
+        works fine, so we make direct API calls.
+        """
+        import httpx
+        import os
 
-            self._agent = Agent(
-                f"{self.config.provider}:{self.config.model}",
-                output_type=list[AnnotationResult],
-                system_prompt=(
-                    "You are a helpful assistant that extracts key terms from speech transcripts "
-                    "and provides brief, educational explanations. Focus on technical terms, "
-                    "jargon, or concepts that viewers might not understand. Keep explanations "
-                    "concise (1-2 sentences max)."
-                ),
-            )
-            self._logger.info(f"Agent initialized with {self.config.provider}:{self.config.model}")
-        except ImportError:
-            self._logger.warning("pydantic-ai not installed, annotator will use mock mode")
-            self._agent = None
-        except Exception as e:
-            # Handle missing API keys, invalid config, etc.
-            self._logger.warning(f"Failed to initialize LLM agent: {e}")
-            self._logger.warning("Annotator will run in mock mode (no LLM calls)")
-            self._agent = None
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            self._logger.warning("OPENAI_API_KEY not set, annotator will use mock mode")
+            return
+
+        self._http_client = httpx.Client(timeout=30.0, proxy=None)
+        self._logger.info(f"HTTP client initialized for {self.config.provider}:{self.config.model}")
 
     async def _warmup_llm(self) -> None:
         """Warmup LLM connection with a simple test call."""
-        if not self._agent:
+        if not self._http_client:
             return
 
+        import os
         try:
             self._logger.info("Warming up LLM connection...")
             start_time = time.time()
-            result = await self._agent.run("Test: hello")
+
+            resp = self._http_client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.config.model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 5,
+                },
+            )
+            resp.raise_for_status()
             latency_ms = (time.time() - start_time) * 1000
-            self._logger.info(f"LLM warmup complete in {latency_ms:.0f}ms")
+            content = resp.json()["choices"][0]["message"]["content"]
+            self._logger.info(f"LLM warmup complete in {latency_ms:.0f}ms: {content}")
         except Exception as e:
             self._logger.warning(f"LLM warmup failed: {e}")
             # Don't raise - allow annotator to start anyway, maybe network is temporarily down
@@ -278,15 +293,49 @@ class AnnotatorActor:
             self._logger.warning(f"Failed to cache annotation: {e}")
 
     async def _call_llm(self, text: str) -> list[tuple[str, str]]:
-        """Call LLM to extract annotations."""
-        if not self._agent:
-            # Mock mode for testing without pydantic-ai
+        """Call LLM to extract annotations using raw httpx.
+
+        Note: We use raw httpx instead of pydantic-ai/OpenAI SDK because the SDK
+        has connection issues when running inside Ray actor subprocesses.
+        """
+        if not self._http_client:
+            # Mock mode - no API key configured
             return []
+
+        import os
+        import json
 
         try:
             prompt = self.config.prompt_template.format(text=text)
             start_time = time.time()
-            result = await self._agent.run(prompt)
+
+            # System prompt for structured extraction
+            system_prompt = (
+                "You are a helpful assistant that extracts key terms from speech transcripts "
+                "and provides brief, educational explanations. Focus on technical terms, "
+                "jargon, or concepts that viewers might not understand. Keep explanations "
+                "concise (1-2 sentences max). "
+                "Respond with a JSON array of objects with 'term' and 'explanation' fields. "
+                "Example: [{\"term\": \"API\", \"explanation\": \"Application Programming Interface\"}]"
+            )
+
+            resp = self._http_client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.config.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": 500,
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            resp.raise_for_status()
             latency_ms = (time.time() - start_time) * 1000
 
             # Record metrics
@@ -294,10 +343,20 @@ class AnnotatorActor:
                 metrics["llm_calls"].add(1)
                 metrics["llm_latency"].record(latency_ms)
 
-            annotations = []
-            for item in result.output:
-                annotations.append((item.term, item.explanation))
-            return annotations
+            # Parse response
+            content = resp.json()["choices"][0]["message"]["content"]
+            try:
+                data = json.loads(content)
+                # Handle both array and object with array inside
+                items = data if isinstance(data, list) else data.get("annotations", data.get("terms", []))
+                annotations = []
+                for item in items:
+                    if isinstance(item, dict) and "term" in item and "explanation" in item:
+                        annotations.append((item["term"], item["explanation"]))
+                return annotations
+            except json.JSONDecodeError:
+                self._logger.warning(f"Failed to parse LLM response as JSON: {content[:100]}")
+                return []
 
         except Exception:
             logfire.exception("LLM call failed")

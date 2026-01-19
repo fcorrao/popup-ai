@@ -1,7 +1,6 @@
 """NiceGUI admin application with tabbed pipeline view."""
 
 import asyncio
-import contextlib
 import logging
 from typing import Any
 
@@ -37,16 +36,7 @@ class PipelineUI:
         self.logfire_url = logfire_url
         self.supervisor: Any = None
         self.ui_queue: Any = None
-        self._status_timer: ui.timer | None = None
-        self._event_timer: ui.timer | None = None
-
-        # UI state management
-        self._state = UIState()
-
-        # Tab instances
-        self._tabs: dict[str, Any] = {}
-        self._pipeline_bar: PipelineBar | None = None
-        self._tab_panels: ui.tab_panels | None = None
+        self._supervisor_init_lock = asyncio.Lock()
 
     async def init_supervisor(self) -> None:
         """Initialize the pipeline supervisor."""
@@ -55,11 +45,25 @@ class PipelineUI:
         self.supervisor = PipelineSupervisor.remote(self.settings)
         self.ui_queue = ray.get(self.supervisor.get_ui_queue.remote())
 
+    async def _ensure_supervisor(self) -> None:
+        """Ensure the supervisor is initialized before polling."""
+        if self.supervisor:
+            return
+        async with self._supervisor_init_lock:
+            if self.supervisor:
+                return
+            await self.init_supervisor()
+
     def build_ui(self) -> None:
-        """Build the admin UI with tabs."""
-        # Create polling timers (inactive until pipeline starts)
-        self._status_timer = ui.timer(2.0, self._poll_status, active=False)
-        self._event_timer = ui.timer(0.1, self._poll_events, active=False)
+        """Build the admin UI with tabs.
+
+        Each browser client gets its own UI elements and state.
+        The supervisor is shared across all clients.
+        """
+        # Per-client state and UI elements (local variables captured by closures)
+        state = UIState()
+        tabs: dict[str, Any] = {}
+        pipeline_bar_ref: list[PipelineBar | None] = [None]
 
         # Header
         with ui.header().classes("bg-primary"):
@@ -68,17 +72,24 @@ class PipelineUI:
         # Main content
         with ui.column().classes("w-full p-4 gap-4"):
             # Pipeline control bar
-            self._pipeline_bar = PipelineBar(
+            async def on_start():
+                await self._do_start_pipeline(state, pipeline_bar_ref[0])
+
+            async def on_stop():
+                await self._do_stop_pipeline(state, pipeline_bar_ref[0])
+
+            pipeline_bar = PipelineBar(
                 settings=self.settings,
-                on_start=self.start_pipeline,
-                on_stop=self.stop_pipeline,
+                on_start=on_start,
+                on_stop=on_stop,
                 dashboard_url=self.dashboard_url,
                 logfire_url=self.logfire_url,
             )
-            self._pipeline_bar.build()
+            pipeline_bar.build()
+            pipeline_bar_ref[0] = pipeline_bar
 
             # Tab navigation
-            with ui.tabs().classes("w-full") as tabs:
+            with ui.tabs().classes("w-full") as tab_nav:
                 ui.tab("overview", label="Overview", icon="dashboard")
                 ui.tab("audio_ingest", label="Audio Ingest", icon="mic")
                 ui.tab("transcriber", label="Transcriber", icon="record_voice_over")
@@ -86,45 +97,109 @@ class PipelineUI:
                 ui.tab("overlay", label="Overlay", icon="tv")
 
             # Tab panels
-            self._tab_panels = ui.tab_panels(tabs, value="overview").classes("w-full")
-            with self._tab_panels:
+            with ui.tab_panels(tab_nav, value="overview").classes("w-full"):
                 with ui.tab_panel("overview"):
-                    self._tabs["overview"] = OverviewTab(self._state)
-                    self._tabs["overview"].build()
+                    tabs["overview"] = OverviewTab(state)
+                    tabs["overview"].build()
 
                 with ui.tab_panel("audio_ingest"):
-                    self._tabs["audio_ingest"] = AudioIngestTab(
-                        self._state,
+                    tabs["audio_ingest"] = AudioIngestTab(
+                        state,
                         self.settings,
                         supervisor_getter=lambda: self.supervisor,
                     )
-                    self._tabs["audio_ingest"].build()
+                    tabs["audio_ingest"].build()
 
                 with ui.tab_panel("transcriber"):
-                    self._tabs["transcriber"] = TranscriberTab(
-                        self._state,
+                    tabs["transcriber"] = TranscriberTab(
+                        state,
                         self.settings,
                         supervisor_getter=lambda: self.supervisor,
                     )
-                    self._tabs["transcriber"].build()
+                    tabs["transcriber"].build()
 
                 with ui.tab_panel("annotator"):
-                    self._tabs["annotator"] = AnnotatorTab(
-                        self._state,
+                    tabs["annotator"] = AnnotatorTab(
+                        state,
                         self.settings,
                         supervisor_getter=lambda: self.supervisor,
                     )
-                    self._tabs["annotator"].build()
+                    tabs["annotator"].build()
 
                 with ui.tab_panel("overlay"):
-                    self._tabs["overlay"] = OverlayTab(
-                        self._state,
+                    tabs["overlay"] = OverlayTab(
+                        state,
                         self.settings,
                         supervisor_getter=lambda: self.supervisor,
                     )
-                    self._tabs["overlay"].build()
+                    tabs["overlay"].build()
 
-    async def start_pipeline(self) -> None:
+        # Per-client polling timers (capture local state/tabs in closures)
+        async def poll_status():
+            try:
+                if not self.supervisor:
+                    await self._ensure_supervisor()
+
+                # Always fetch statuses so the UI can refresh even after reconnects.
+                is_running = await self.supervisor.is_running.remote()
+                if state.pipeline_running != is_running:
+                    state.pipeline_running = is_running
+                    if pipeline_bar_ref[0]:
+                        pipeline_bar_ref[0].set_running(is_running)
+                    if not is_running:
+                        state.clear()
+
+                statuses = await self.supervisor.get_status.remote()
+                state.update_statuses(statuses)
+                all_statuses = {
+                    name: stage.status for name, stage in state.stages.items()
+                }
+                # Update overview tab
+                if "overview" in tabs:
+                    tabs["overview"].update(all_statuses)
+                # Update individual tabs
+                for tab_name in ["audio_ingest", "transcriber", "annotator", "overlay"]:
+                    if tab_name in tabs and hasattr(tabs[tab_name], "update"):
+                        tabs[tab_name].update()
+            except Exception as e:
+                logger.debug(f"Status poll failed: {e}")
+
+        async def poll_events():
+            try:
+                if not self.ui_queue:
+                    await self._ensure_supervisor()
+
+                if self.ui_queue:
+                    for _ in range(100):
+                        try:
+                            event = self.ui_queue.get_nowait()
+                            if isinstance(event, UIEvent):
+                                state.handle_event(event)
+                                # Route to appropriate tab
+                                event_to_tab = {
+                                    "chunk_produced": "audio_ingest",
+                                    "audio_received": "transcriber",
+                                    "transcript": "transcriber",
+                                    "transcript_received": "annotator",
+                                    "annotation": "annotator",
+                                    "annotation_received": "overlay",
+                                    "display": "overlay",
+                                    "clear": "overlay",
+                                }
+                                tab_name = event_to_tab.get(event.event_type)
+                                if tab_name and tab_name in tabs:
+                                    tab = tabs[tab_name]
+                                    if hasattr(tab, "handle_event"):
+                                        tab.handle_event(event)
+                        except Exception:
+                            break
+            except Exception as e:
+                logger.debug(f"Event poll failed: {e}")
+
+        ui.timer(2.0, poll_status)
+        ui.timer(0.1, poll_events)
+
+    async def _do_start_pipeline(self, state: UIState, pipeline_bar: PipelineBar | None) -> None:
         """Start the pipeline."""
         ui.notify("Starting pipeline...", type="info")
 
@@ -133,24 +208,18 @@ class PipelineUI:
                 await self.init_supervisor()
 
             await self.supervisor.start.remote()
-            self._state.pipeline_running = True
-            if self._pipeline_bar:
-                self._pipeline_bar.set_running(True)
+            state.pipeline_running = True
+            if pipeline_bar:
+                pipeline_bar.set_running(True)
             ui.notify("Pipeline started", type="positive")
-
-            # Activate polling timers
-            if self._status_timer:
-                self._status_timer.activate()
-            if self._event_timer:
-                self._event_timer.activate()
 
         except Exception as e:
             logger.exception("Failed to start pipeline")
             ui.notify(f"Failed to start: {e}", type="negative")
-            if self._pipeline_bar:
-                self._pipeline_bar.set_running(False)
+            if pipeline_bar:
+                pipeline_bar.set_running(False)
 
-    async def stop_pipeline(self) -> None:
+    async def _do_stop_pipeline(self, state: UIState, pipeline_bar: PipelineBar | None) -> None:
         """Stop the pipeline."""
         ui.notify("Stopping pipeline...", type="info")
 
@@ -158,82 +227,15 @@ class PipelineUI:
             if self.supervisor:
                 await self.supervisor.stop.remote()
 
-            # Stop polling timers
-            if self._status_timer:
-                self._status_timer.deactivate()
-            if self._event_timer:
-                self._event_timer.deactivate()
-
-            self._state.pipeline_running = False
-            self._state.clear()
-            if self._pipeline_bar:
-                self._pipeline_bar.set_running(False)
+            state.pipeline_running = False
+            state.clear()
+            if pipeline_bar:
+                pipeline_bar.set_running(False)
             ui.notify("Pipeline stopped", type="positive")
 
         except Exception as e:
             logger.exception("Failed to stop pipeline")
             ui.notify(f"Failed to stop: {e}", type="negative")
-
-    async def _poll_status(self) -> None:
-        """Poll actor status (called by ui.timer)."""
-        try:
-            if self.supervisor:
-                statuses = await self.supervisor.get_status.remote()
-                self._state.update_statuses(statuses)
-                self._update_tabs(statuses)
-        except Exception as e:
-            logger.debug(f"Status poll failed: {e}")
-
-    async def _poll_events(self) -> None:
-        """Poll UI events from actors (called by ui.timer)."""
-        try:
-            if self.ui_queue:
-                # Drain all available events
-                for _ in range(100):  # Process up to 100 events per tick
-                    try:
-                        event = self.ui_queue.get_nowait()
-                        if isinstance(event, UIEvent):
-                            self._handle_event(event)
-                    except Exception:
-                        break
-        except Exception as e:
-            logger.debug(f"Event poll failed: {e}")
-
-    def _handle_event(self, event: UIEvent) -> None:
-        """Handle a UI event from an actor."""
-        # Route to state manager
-        self._state.handle_event(event)
-
-        # Route to appropriate tab
-        event_to_tab = {
-            "chunk_produced": "audio_ingest",
-            "audio_received": "transcriber",
-            "transcript": "transcriber",
-            "transcript_received": "annotator",
-            "annotation": "annotator",
-            "annotation_received": "overlay",
-            "display": "overlay",
-            "clear": "overlay",
-        }
-
-        tab_name = event_to_tab.get(event.event_type)
-        if tab_name and tab_name in self._tabs:
-            tab = self._tabs[tab_name]
-            if hasattr(tab, "handle_event"):
-                tab.handle_event(event)
-
-    def _update_tabs(self, statuses: dict[str, ActorStatus]) -> None:
-        """Update all tabs with new status data."""
-        # Update overview tab
-        if "overview" in self._tabs:
-            self._tabs["overview"].update(statuses)
-
-        # Update individual tabs
-        for tab_name in ["audio_ingest", "transcriber", "annotator", "overlay"]:
-            if tab_name in self._tabs:
-                tab = self._tabs[tab_name]
-                if hasattr(tab, "update"):
-                    tab.update()
 
 
 def run_app(settings: Settings) -> None:
@@ -271,23 +273,25 @@ def run_app(settings: Settings) -> None:
     if dashboard_url and not dashboard_url.startswith("http"):
         dashboard_url = f"http://{dashboard_url}"
 
-    pipeline_ui = PipelineUI(settings, dashboard_url=dashboard_url, logfire_url=logfire_url)
+    # Create UI instance (supervisor is shared, UI elements are per-client)
+    pipeline_ui = PipelineUI(settings, dashboard_url, logfire_url)
+
+    # Initialize supervisor upfront so it's ready when clients connect
+    import asyncio
+
+    @app.on_startup
+    async def startup():
+        await pipeline_ui.init_supervisor()
 
     @ui.page("/")
     def index() -> None:
         pipeline_ui.build_ui()
 
-    @app.on_shutdown
-    async def shutdown() -> None:
-        if pipeline_ui.supervisor:
-            with contextlib.suppress(Exception):
-                await pipeline_ui.stop_pipeline()
-        ray.shutdown()
-
+    # Configure NiceGUI
     ui.run(
         title="popup-ai Admin",
         host=settings.pipeline.ui_host,
         port=settings.pipeline.ui_port,
         reload=False,
-        show=True,
+        show=False,
     )
