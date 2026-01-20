@@ -42,9 +42,11 @@ class AnnotatorTab:
         self._model_select: ui.select | None = None
         self._base_url_input: ui.input | None = None
         self._api_key_env_input: ui.input | None = None
+        self._system_prompt_textarea: ui.textarea | None = None
         self._prompt_textarea: ui.textarea | None = None
         self._settings_status: ui.label | None = None
         self._local_settings_container: ui.column | None = None
+        self._schema_code: ui.code | None = None
 
     def build(self) -> ui.column:
         """Build and return the annotator tab content."""
@@ -57,6 +59,89 @@ class AnnotatorTab:
                 "annotator", stage.status if stage else None
             )
             self._status_card.build()
+
+            # Settings (collapsed) - placed high for easy access
+            with ui.expansion("Annotator Settings", icon="settings").classes("w-full"):
+                with ui.column().classes("gap-4 p-2 w-full"):
+                    # Provider selection
+                    with ui.row().classes("gap-4 w-full items-end"):
+                        self._provider_select = ui.select(
+                            label="Provider",
+                            options=list(PROVIDER_MODELS.keys()),
+                            value=self._settings.annotator.provider,
+                            on_change=self._handle_provider_change,
+                        ).classes("w-48")
+
+                        # Model selection with suggestions
+                        initial_models = PROVIDER_MODELS.get(
+                            self._settings.annotator.provider, []
+                        )
+                        self._model_select = ui.select(
+                            label="Model",
+                            options=initial_models,
+                            value=self._settings.annotator.model,
+                            with_input=True,
+                            on_change=self._handle_model_change,
+                        ).classes("flex-1")
+
+                    # Local model settings (hidden by default)
+                    self._local_settings_container = ui.column().classes("gap-2 w-full")
+                    with self._local_settings_container:
+                        ui.label("Local Model Settings").classes("text-caption text-grey")
+                        with ui.row().classes("gap-4 w-full"):
+                            self._base_url_input = ui.input(
+                                label="Base URL",
+                                value=self._settings.annotator.base_url or "",
+                                placeholder="http://localhost:11434/v1",
+                            ).classes("flex-1")
+
+                            self._api_key_env_input = ui.input(
+                                label="API Key Env Var (optional)",
+                                value=self._settings.annotator.api_key_env_var or "",
+                                placeholder="LOCAL_LLM_API_KEY",
+                            ).classes("w-48")
+
+                    # Toggle local settings visibility
+                    self._local_settings_container.set_visibility(
+                        self._settings.annotator.provider == "openai_compatible"
+                    )
+
+                    # System prompt
+                    ui.label("System Prompt").classes("text-caption text-grey mt-2")
+                    self._system_prompt_textarea = ui.textarea(
+                        value=self._settings.annotator.system_prompt,
+                        placeholder="Enter system prompt for the LLM...",
+                    ).classes("w-full").props("rows=4")
+
+                    # Prompt template
+                    ui.label("Prompt Template").classes("text-caption text-grey mt-2")
+                    self._prompt_textarea = ui.textarea(
+                        value=self._settings.annotator.prompt_template,
+                        placeholder="Enter prompt template with {text} placeholder...",
+                    ).classes("w-full").props("rows=2")
+
+                    # Action buttons
+                    with ui.row().classes("gap-2"):
+                        ui.button(
+                            "Apply Changes",
+                            on_click=self._handle_apply_settings,
+                            icon="check",
+                        ).props("color=primary")
+
+                        ui.button(
+                            "Reset to Defaults",
+                            on_click=self._handle_reset_settings,
+                            icon="refresh",
+                        ).props("color=secondary outline")
+
+                    self._settings_status = ui.label("").classes("text-caption")
+
+                    # Output schema display
+                    with ui.expansion("Output JSON Schema", icon="schema").classes("w-full mt-2"):
+                        self._schema_code = ui.code(
+                            self._get_schema_json(),
+                            language="json",
+                        ).classes("w-full")
 
             # Test Input panel (collapsed)
             with ui.expansion("Test Input", icon="science").classes("w-full"):
@@ -145,74 +230,6 @@ class AnnotatorTab:
                     self._llm_label = ui.label(f"Provider: {provider}:{model}")
                     self._cache_hits_label = ui.label("Cache Hits: 0")
                     self._llm_calls_label = ui.label("LLM Calls: 0")
-
-            # Settings (collapsed)
-            with ui.expansion("Annotator Settings", icon="settings").classes("w-full"):
-                with ui.column().classes("gap-4 p-2 w-full"):
-                    # Provider selection
-                    with ui.row().classes("gap-4 w-full items-end"):
-                        self._provider_select = ui.select(
-                            label="Provider",
-                            options=list(PROVIDER_MODELS.keys()),
-                            value=self._settings.annotator.provider,
-                            on_change=self._handle_provider_change,
-                        ).classes("w-48")
-
-                        # Model selection with suggestions
-                        initial_models = PROVIDER_MODELS.get(
-                            self._settings.annotator.provider, []
-                        )
-                        self._model_select = ui.select(
-                            label="Model",
-                            options=initial_models,
-                            value=self._settings.annotator.model,
-                            with_input=True,
-                        ).classes("flex-1")
-
-                    # Local model settings (hidden by default)
-                    self._local_settings_container = ui.column().classes("gap-2 w-full")
-                    with self._local_settings_container:
-                        ui.label("Local Model Settings").classes("text-caption text-grey")
-                        with ui.row().classes("gap-4 w-full"):
-                            self._base_url_input = ui.input(
-                                label="Base URL",
-                                value=self._settings.annotator.base_url or "",
-                                placeholder="http://localhost:11434/v1",
-                            ).classes("flex-1")
-
-                            self._api_key_env_input = ui.input(
-                                label="API Key Env Var (optional)",
-                                value=self._settings.annotator.api_key_env_var or "",
-                                placeholder="LOCAL_LLM_API_KEY",
-                            ).classes("w-48")
-
-                    # Toggle local settings visibility
-                    self._local_settings_container.set_visibility(
-                        self._settings.annotator.provider == "openai_compatible"
-                    )
-
-                    # Prompt template
-                    ui.label("Prompt Template").classes("text-caption text-grey mt-2")
-                    self._prompt_textarea = ui.textarea(
-                        value=self._settings.annotator.prompt_template,
-                        placeholder="Enter prompt template with {text} placeholder...",
-                    ).classes("w-full").props("rows=3")
-
-                    # Action buttons
-                    with ui.row().classes("gap-2"):
-                        ui.button(
-                            "Apply Changes",
-                            on_click=self._handle_apply_settings,
-                            icon="check",
-                        ).props("color=primary")
-
-                        ui.button(
-                            "Reset to Defaults",
-                            on_click=self._handle_reset_settings,
-                            icon="refresh",
-                        ).props("color=secondary outline")
-
-                    self._settings_status = ui.label("").classes("text-caption")
 
         return container
 
@@ -338,9 +355,39 @@ class AnnotatorTab:
         self._model_select.options = models
         if models:
             self._model_select.set_value(models[0])
+            # Load prompts for the new model
+            self._load_prompts_for_model(provider, models[0])
 
         # Show/hide local settings
         self._local_settings_container.set_visibility(provider == "openai_compatible")
+
+    def _handle_model_change(self, e: Any) -> None:
+        """Handle model selection change - load prompts for the new model."""
+        model = e.value
+        if not self._provider_select or not model:
+            return
+        provider = self._provider_select.value
+        self._load_prompts_for_model(provider, model)
+
+    def _load_prompts_for_model(self, provider: str, model: str) -> None:
+        """Load prompts for a specific provider/model from DB."""
+        if not self._supervisor_getter:
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            return
+
+        try:
+            import ray
+            prompts = ray.get(supervisor.get_annotator_prompts.remote(provider, model))
+            if self._system_prompt_textarea:
+                self._system_prompt_textarea.set_value(prompts.get("system_prompt", ""))
+            if self._prompt_textarea:
+                self._prompt_textarea.set_value(prompts.get("prompt_template", ""))
+        except Exception as ex:
+            # Silently fall back to current values on error
+            pass
 
     async def _handle_apply_settings(self) -> None:
         """Apply settings changes and reconfigure annotator."""
@@ -356,6 +403,7 @@ class AnnotatorTab:
         if not all([
             self._provider_select,
             self._model_select,
+            self._system_prompt_textarea,
             self._prompt_textarea,
         ]):
             return
@@ -364,6 +412,7 @@ class AnnotatorTab:
             # Build new config
             provider = self._provider_select.value
             model = self._model_select.value
+            system_prompt = self._system_prompt_textarea.value
             prompt = self._prompt_textarea.value
 
             # Get local settings if applicable
@@ -380,11 +429,18 @@ class AnnotatorTab:
                 model=model,
                 base_url=base_url,
                 api_key_env_var=api_key_env_var,
+                system_prompt=system_prompt,
                 prompt_template=prompt,
                 cache_enabled=self._settings.annotator.cache_enabled,
                 cache_path=self._settings.annotator.cache_path,
                 max_tokens=self._settings.annotator.max_tokens,
             )
+
+            # Save prompts to DB for this provider/model
+            import ray
+            ray.get(supervisor.set_annotator_prompts.remote(
+                provider, model, system_prompt, prompt
+            ))
 
             # Reconfigure annotator
             await supervisor.reconfigure_annotator.remote(new_config)
@@ -424,6 +480,9 @@ class AnnotatorTab:
         if self._api_key_env_input:
             self._api_key_env_input.set_value("")
 
+        if self._system_prompt_textarea:
+            self._system_prompt_textarea.set_value(defaults.system_prompt)
+
         if self._prompt_textarea:
             self._prompt_textarea.set_value(defaults.prompt_template)
 
@@ -431,3 +490,12 @@ class AnnotatorTab:
             self._settings_status.set_text("Reset to defaults (not yet applied)")
 
         ui.notify("Settings reset to defaults. Click 'Apply Changes' to save.", type="info")
+
+    def _get_schema_json(self) -> str:
+        """Get the JSON schema for the annotation output model as formatted JSON string."""
+        import json
+
+        from popup_ai.actors.annotator import get_annotation_schema
+
+        schema = get_annotation_schema()
+        return json.dumps(schema, indent=2)

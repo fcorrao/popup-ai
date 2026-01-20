@@ -40,6 +40,24 @@ class AudioIngestTab:
             )
             self._status_card.build()
 
+            # Settings (collapsed) - placed high for easy access
+            with ui.expansion("Audio Settings", icon="settings").classes("w-full"):
+                with ui.column().classes("gap-2 p-2"):
+                    ui.number(
+                        "SRT Port",
+                        value=self._settings.audio.srt_port,
+                        on_change=lambda e: setattr(
+                            self._settings.audio, "srt_port", int(e.value)
+                        ),
+                    )
+                    ui.number(
+                        "Latency (ms)",
+                        value=self._settings.audio.srt_latency_ms,
+                        on_change=lambda e: setattr(
+                            self._settings.audio, "srt_latency_ms", int(e.value)
+                        ),
+                    )
+
             # Test Audio Input panel (collapsed)
             with ui.expansion("Test Audio Input", icon="science").classes("w-full"):
                 with ui.column().classes("gap-2 p-2"):
@@ -74,24 +92,6 @@ class AudioIngestTab:
                 format_fn=format_audio_event,
             )
             self._output_viewer.build()
-
-            # Settings (collapsed)
-            with ui.expansion("Audio Settings", icon="settings").classes("w-full"):
-                with ui.column().classes("gap-2 p-2"):
-                    ui.number(
-                        "SRT Port",
-                        value=self._settings.audio.srt_port,
-                        on_change=lambda e: setattr(
-                            self._settings.audio, "srt_port", int(e.value)
-                        ),
-                    )
-                    ui.number(
-                        "Latency (ms)",
-                        value=self._settings.audio.srt_latency_ms,
-                        on_change=lambda e: setattr(
-                            self._settings.audio, "srt_latency_ms", int(e.value)
-                        ),
-                    )
 
         return container
 

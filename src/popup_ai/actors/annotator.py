@@ -32,12 +32,30 @@ class AnnotationResponse(BaseModel):
     annotations: list[AnnotationResult]
 
 
-SYSTEM_PROMPT = """You are a helpful assistant that extracts key terms from speech transcripts \
-and provides brief, educational explanations. Focus on technical terms, jargon, or concepts \
-that viewers might not understand.
+def get_annotation_schema() -> dict:
+    """Get the JSON schema for the annotation output model."""
+    return AnnotationResponse.model_json_schema()
 
-Keep explanations terse - readable in under 5 seconds. Return 1-3 annotations per transcript \
-depending on content. Return an empty annotations list if no terms warrant explanation."""
+
+# Default system prompt (used if config doesn't specify one)
+DEFAULT_SYSTEM_PROMPT = """You are a helpful assistant that extracts key terms from speech transcripts and provides brief, educational explanations.
+
+Focus on "terms of art" - specialized jargon that someone outside programming or computer science would NOT be familiar with. These are words that have specific technical meanings in our field but would confuse a general audience.
+
+GOOD examples of terms to annotate:
+- "emacs" → "A text editor like MS Word used by programmers. Very extensible, so it can do much more than edit text."
+- "internal fragmentation" → "Renting a storage unit too big for your stuff—you pay for space you can't use."
+- "garbage collection" → "Automatic cleanup of memory your program no longer needs, like a self-emptying trash can."
+- "race condition" → "When two processes compete to update the same data, like two people editing the same document—whoever saves last wins."
+
+BAD examples (too common/obvious, don't annotate these):
+- "computer", "software", "website", "app", "code", "programming"
+
+Guidelines:
+- Use metaphors and analogies to everyday objects when possible
+- Keep explanations terse - readable in under 5 seconds
+- Return 1-3 annotations per transcript depending on content density
+- Return an empty annotations list if no terms warrant explanation"""
 
 
 @ray.remote
@@ -168,24 +186,100 @@ class AnnotatorActor:
         return self._state == "running" and self._running
 
     def _init_cache(self) -> None:
-        """Initialize SQLite cache."""
-        if not self.config.cache_enabled:
-            return
-
+        """Initialize SQLite cache and prompts storage."""
         cache_path = Path(self.config.cache_path).expanduser()
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._db_conn = sqlite3.connect(str(cache_path))
+
+        # Annotations cache table
+        if self.config.cache_enabled:
+            self._db_conn.execute("""
+                CREATE TABLE IF NOT EXISTS annotations (
+                    text_hash TEXT PRIMARY KEY,
+                    term TEXT NOT NULL,
+                    explanation TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+
+        # Prompts table (always created for prompt persistence)
         self._db_conn.execute("""
-            CREATE TABLE IF NOT EXISTS annotations (
-                text_hash TEXT PRIMARY KEY,
-                term TEXT NOT NULL,
-                explanation TEXT NOT NULL,
-                created_at REAL NOT NULL
+            CREATE TABLE IF NOT EXISTS prompts (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                system_prompt TEXT NOT NULL,
+                prompt_template TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (provider, model)
             )
         """)
         self._db_conn.commit()
-        self._logger.info(f"Cache initialized at {cache_path}")
+        self._logger.info(f"Database initialized at {cache_path}")
+
+    def _load_prompts(self, provider: str, model: str) -> tuple[str, str] | None:
+        """Load prompts for a specific provider/model from DB.
+
+        Returns (system_prompt, prompt_template) or None if not found.
+        """
+        if not self._db_conn:
+            return None
+
+        try:
+            cursor = self._db_conn.execute(
+                "SELECT system_prompt, prompt_template FROM prompts WHERE provider = ? AND model = ?",
+                (provider, model),
+            )
+            row = cursor.fetchone()
+            if row:
+                return (row[0], row[1])
+            return None
+        except Exception as e:
+            self._logger.warning(f"Failed to load prompts: {e}")
+            return None
+
+    def _save_prompts(self, provider: str, model: str, system_prompt: str, prompt_template: str) -> bool:
+        """Save prompts for a specific provider/model to DB."""
+        if not self._db_conn:
+            return False
+
+        try:
+            self._db_conn.execute(
+                """
+                INSERT OR REPLACE INTO prompts (provider, model, system_prompt, prompt_template, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (provider, model, system_prompt, prompt_template, time.time()),
+            )
+            self._db_conn.commit()
+            self._logger.info(f"Saved prompts for {provider}:{model}")
+            return True
+        except Exception as e:
+            self._logger.warning(f"Failed to save prompts: {e}")
+            return False
+
+    def get_prompts(self, provider: str, model: str) -> dict[str, str]:
+        """Get prompts for a provider/model, falling back to config defaults.
+
+        Returns dict with 'system_prompt' and 'prompt_template' keys.
+        """
+        # Try to load from DB first
+        db_prompts = self._load_prompts(provider, model)
+        if db_prompts:
+            return {
+                "system_prompt": db_prompts[0],
+                "prompt_template": db_prompts[1],
+            }
+
+        # Fall back to config defaults
+        return {
+            "system_prompt": getattr(self.config, 'system_prompt', None) or DEFAULT_SYSTEM_PROMPT,
+            "prompt_template": self.config.prompt_template,
+        }
+
+    def set_prompts(self, provider: str, model: str, system_prompt: str, prompt_template: str) -> bool:
+        """Save prompts for a provider/model to DB."""
+        return self._save_prompts(provider, model, system_prompt, prompt_template)
 
     def _init_agent(self) -> None:
         """Initialize pydantic-ai agent for LLM calls."""
@@ -196,10 +290,15 @@ class AnnotatorActor:
             self._logger.warning("No API key configured, annotator will use mock mode")
             return
 
+        # Load prompts from DB, falling back to config defaults
+        prompts = self.get_prompts(self.config.provider, self.config.model)
+        self._current_system_prompt = prompts["system_prompt"]
+        self._current_prompt_template = prompts["prompt_template"]
+
         self._agent = Agent(
             model,
             output_type=AnnotationResponse,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=self._current_system_prompt,
         )
         self._logger.info(f"Agent initialized for {self.config.provider}:{self.config.model}")
 
@@ -231,12 +330,8 @@ class AnnotatorActor:
             if not api_key:
                 self._logger.warning("CEREBRAS_API_KEY not set")
                 return None
-            from pydantic_ai.models.openai import OpenAIModel
-            from pydantic_ai.providers.cerebras import CerebrasProvider
-            return OpenAIModel(
-                self.config.model,
-                provider=CerebrasProvider(http_client=self._http_client),
-            )
+            from pydantic_ai.models.cerebras import CerebrasModel
+            return CerebrasModel(self.config.model)
 
         elif self.config.provider == "openai_compatible":
             # For local models (Ollama, vLLM, etc.)
@@ -276,7 +371,7 @@ class AnnotatorActor:
             latency_ms = (time.time() - start_time) * 1000
             self._logger.info(f"LLM warmup complete in {latency_ms:.0f}ms")
         except Exception as e:
-            self._logger.warning(f"LLM warmup failed: {e}")
+            self._logger.exception(f"LLM warmup failed: {e}")
             # Don't raise - allow annotator to start anyway, maybe network is temporarily down
 
     async def _process_loop(self) -> None:
@@ -364,26 +459,34 @@ class AnnotatorActor:
             # Mock mode - no API key configured
             return []
 
-        try:
-            prompt = self.config.prompt_template.format(text=text)
-            start_time = time.time()
+        # Use current prompt template (from DB or config default)
+        prompt_template = getattr(self, '_current_prompt_template', None) or self.config.prompt_template
+        prompt = prompt_template.format(text=text)
 
-            # Use pydantic-ai agent for structured output
-            result = await self._agent.run(prompt)
-            latency_ms = (time.time() - start_time) * 1000
+        # Retry once with agent reinitialization on connection errors
+        for attempt in range(2):
+            try:
+                start_time = time.time()
+                result = await self._agent.run(prompt)
+                latency_ms = (time.time() - start_time) * 1000
 
-            # Record metrics
-            if metrics := get_metrics():
-                metrics["llm_calls"].add(1)
-                metrics["llm_latency"].record(latency_ms)
+                # Record metrics
+                if metrics := get_metrics():
+                    metrics["llm_calls"].add(1)
+                    metrics["llm_latency"].record(latency_ms)
 
-            # Extract annotations from structured response
-            annotations = [(a.term, a.explanation) for a in result.data.annotations]
-            return annotations
+                # Extract annotations from structured response
+                annotations = [(a.term, a.explanation) for a in result.output.annotations]
+                return annotations
+            except Exception as e:
+                error_msg = str(e).lower()
+                if attempt == 0 and ("connection" in error_msg or "connect" in error_msg):
+                    self._logger.warning(f"Connection error, reinitializing agent: {e}")
+                    self._init_agent()
+                    continue
+                raise
 
-        except Exception:
-            logfire.exception("LLM call failed")
-            return []
+        return []  # Unreachable, but satisfies type checker
 
     async def _emit_annotation(
         self, term: str, explanation: str, cache_hit: bool = False

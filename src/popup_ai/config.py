@@ -53,25 +53,46 @@ class AnnotatorConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="POPUP_ANNOTATOR_")
 
-    provider: str = Field(default="openai", description="LLM provider")
-    model: str = Field(default="gpt-4o-mini", description="LLM model")
-    base_url: str | None = Field(default=None, description="Custom API URL for local models")
+    provider: str = Field(default="openai_compatible", description="LLM provider")
+    model: str = Field(default="nvidia/nemotron-3-nano", description="LLM model")
+    base_url: str | None = Field(default="http://192.168.1.64:1234/v1", description="Custom API URL for local models (e.g., LM Studio)")
     api_key_env_var: str | None = Field(default=None, description="Env var for API key")
     max_tokens: int = Field(default=500, description="Max response tokens")
     cache_enabled: bool = Field(default=True, description="Enable SQLite cache")
     cache_path: Path = Field(default=Path("~/.popup-ai/cache.db"), description="Cache DB path")
+    system_prompt: str = Field(
+        default="""You are a helpful assistant that extracts key terms from speech transcripts and provides brief, educational explanations.
+
+Focus on "terms of art" - specialized jargon that someone outside programming or computer science would NOT be familiar with. These are words that have specific technical meanings in our field but would confuse a general audience.
+
+GOOD examples of terms to annotate:
+- "emacs" → "A text editor like MS Word used by programmers. Very extensible, so it can do much more than edit text."
+- "internal fragmentation" → "Renting a storage unit too big for your stuff—you pay for space you can't use."
+- "garbage collection" → "Automatic cleanup of memory your program no longer needs, like a self-emptying trash can."
+- "race condition" → "When two processes compete to update the same data, like two people editing the same document—whoever saves last wins."
+
+BAD examples (too common/obvious, don't annotate these):
+- "computer", "software", "website", "app", "code", "programming"
+
+Guidelines:
+- Use metaphors and analogies to everyday objects when possible
+- Keep explanations terse - readable in under 5 seconds
+- Return 1-3 annotations per transcript depending on content density
+- Return an empty annotations list if no terms warrant explanation""",
+        description="System prompt for the LLM",
+    )
     prompt_template: str = Field(
-        default="Extract up to 3 key technical terms or concepts from this transcript with terse explanations: {text}",
+        default="Extract key technical terms or concepts from this transcript: {text}",
         description="Prompt template for annotation",
     )
 
 
 # Model suggestions for each provider (used by UI)
 PROVIDER_MODELS: dict[str, list[str]] = {
-    "openai": ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
-    "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
-    "cerebras": ["llama3.1-8b", "llama3.1-70b"],
-    "openai_compatible": ["llama3.2", "mistral", "qwen2.5"],
+    "openai": ["gpt-5-nano", "gpt-4.1-mini", "gpt-5", "gpt-5.2"],
+    "anthropic": ["claude-haiku-4-5", "claude-sonnet-4-5"],
+    "cerebras": ["gpt-oss-120b", "llama-3.3-70b"],
+    "openai_compatible": ["nvidia/nemotron-3-nano", "llama3.2", "mistral", "qwen2.5"],
 }
 
 

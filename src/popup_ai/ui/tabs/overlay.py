@@ -54,6 +54,31 @@ class OverlayTab:
             self._status_card = StatusCard("overlay", stage.status if stage else None)
             self._status_card.build()
 
+            # Settings (collapsed) - placed high for easy access
+            with ui.expansion("Overlay Settings", icon="settings").classes("w-full"):
+                with ui.column().classes("gap-2 p-2"):
+                    ui.input(
+                        "OBS Host",
+                        value=self._settings.overlay.obs_host,
+                        on_change=lambda e: setattr(
+                            self._settings.overlay, "obs_host", e.value
+                        ),
+                    )
+                    ui.number(
+                        "OBS Port",
+                        value=self._settings.overlay.obs_port,
+                        on_change=lambda e: setattr(
+                            self._settings.overlay, "obs_port", int(e.value)
+                        ),
+                    )
+                    ui.number(
+                        "Hold Duration (ms)",
+                        value=self._settings.overlay.hold_duration_ms,
+                        on_change=lambda e: setattr(
+                            self._settings.overlay, "hold_duration_ms", int(e.value)
+                        ),
+                    )
+
             # Send Test Annotation panel
             with ui.card().classes("w-full"):
                 ui.label("Send Test Annotation").classes("text-h6")
@@ -173,31 +198,6 @@ class OverlayTab:
                         format_fn=format_overlay_event,
                     )
                     self._output_viewer.build()
-
-            # Settings (collapsed)
-            with ui.expansion("Overlay Settings", icon="settings").classes("w-full"):
-                with ui.column().classes("gap-2 p-2"):
-                    ui.input(
-                        "OBS Host",
-                        value=self._settings.overlay.obs_host,
-                        on_change=lambda e: setattr(
-                            self._settings.overlay, "obs_host", e.value
-                        ),
-                    )
-                    ui.number(
-                        "OBS Port",
-                        value=self._settings.overlay.obs_port,
-                        on_change=lambda e: setattr(
-                            self._settings.overlay, "obs_port", int(e.value)
-                        ),
-                    )
-                    ui.number(
-                        "Hold Duration (ms)",
-                        value=self._settings.overlay.hold_duration_ms,
-                        on_change=lambda e: setattr(
-                            self._settings.overlay, "hold_duration_ms", int(e.value)
-                        ),
-                    )
 
         return container
 

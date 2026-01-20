@@ -247,6 +247,32 @@ class PipelineSupervisor:
             await self._actors["annotator"].reconfigure.remote(new_config)
             self._logger.info(f"Annotator reconfigured to {new_config.provider}:{new_config.model}")
 
+    def get_annotator_prompts(self, provider: str, model: str) -> dict[str, str]:
+        """Get prompts for a provider/model from annotator DB.
+
+        Returns dict with 'system_prompt' and 'prompt_template' keys.
+        Falls back to config defaults if not found in DB.
+        """
+        if "annotator" not in self._actors:
+            # Fall back to config defaults
+            return {
+                "system_prompt": self.settings.annotator.system_prompt,
+                "prompt_template": self.settings.annotator.prompt_template,
+            }
+        return ray.get(self._actors["annotator"].get_prompts.remote(provider, model))
+
+    def set_annotator_prompts(
+        self, provider: str, model: str, system_prompt: str, prompt_template: str
+    ) -> bool:
+        """Save prompts for a provider/model to annotator DB."""
+        if "annotator" not in self._actors:
+            return False
+        return ray.get(
+            self._actors["annotator"].set_prompts.remote(
+                provider, model, system_prompt, prompt_template
+            )
+        )
+
     # ========== Test Injection Methods ==========
 
     def inject_audio(
@@ -483,6 +509,15 @@ class PipelineSupervisor:
         except Exception as e:
             self._logger.error(f"Failed to inject annotation: {e}")
             return False
+
+    def get_annotation_schema(self) -> dict:
+        """Get the JSON schema for the annotation output model.
+
+        Returns:
+            JSON schema dict for the pydantic model used by pydantic-ai
+        """
+        from popup_ai.actors.annotator import get_annotation_schema
+        return get_annotation_schema()
 
     def overlay_get_discovered_slots(self) -> list[int]:
         """Get the list of discovered overlay slots.

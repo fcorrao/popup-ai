@@ -46,6 +46,46 @@ class TranscriberTab:
             )
             self._status_card.build()
 
+            # Settings (collapsed) - placed high for easy access
+            with ui.expansion("Transcriber Settings", icon="settings").classes("w-full"):
+                with ui.column().classes("gap-2 p-2"):
+                    ui.input(
+                        "Model",
+                        value=self._settings.transcriber.model,
+                        on_change=lambda e: setattr(
+                            self._settings.transcriber, "model", e.value
+                        ),
+                    )
+                    ui.number(
+                        "Chunk Length (s)",
+                        value=self._settings.transcriber.chunk_length_s,
+                        min=1.0,
+                        max=30.0,
+                        step=0.5,
+                        on_change=lambda e: setattr(
+                            self._settings.transcriber, "chunk_length_s", float(e.value)
+                        ),
+                    )
+
+                    ui.label("Audio Preprocessing").classes("font-medium mt-2")
+                    ui.checkbox(
+                        "Enable VAD",
+                        value=self._settings.transcriber.vad_enabled,
+                        on_change=lambda e: setattr(
+                            self._settings.transcriber, "vad_enabled", e.value
+                        ),
+                    )
+                    ui.number(
+                        "VAD Threshold",
+                        value=self._settings.transcriber.vad_threshold,
+                        min=0.0,
+                        max=1.0,
+                        step=0.1,
+                        on_change=lambda e: setattr(
+                            self._settings.transcriber, "vad_threshold", float(e.value)
+                        ),
+                    )
+
             # Test Input panel (collapsed)
             with ui.expansion("Test Input", icon="science").classes("w-full"):
                 with ui.tabs().classes("w-full") as test_tabs:
@@ -117,46 +157,6 @@ class TranscriberTab:
                     self._vad_label = ui.label(f"VAD: {vad_status}")
                     self._speech_label = ui.label("Speech Chunks: 0")
                     self._silence_label = ui.label("Silent Chunks: 0")
-
-            # Settings (collapsed)
-            with ui.expansion("Transcriber Settings", icon="settings").classes("w-full"):
-                with ui.column().classes("gap-2 p-2"):
-                    ui.input(
-                        "Model",
-                        value=self._settings.transcriber.model,
-                        on_change=lambda e: setattr(
-                            self._settings.transcriber, "model", e.value
-                        ),
-                    )
-                    ui.number(
-                        "Chunk Length (s)",
-                        value=self._settings.transcriber.chunk_length_s,
-                        min=1.0,
-                        max=30.0,
-                        step=0.5,
-                        on_change=lambda e: setattr(
-                            self._settings.transcriber, "chunk_length_s", float(e.value)
-                        ),
-                    )
-
-                    ui.label("Audio Preprocessing").classes("font-medium mt-2")
-                    ui.checkbox(
-                        "Enable VAD",
-                        value=self._settings.transcriber.vad_enabled,
-                        on_change=lambda e: setattr(
-                            self._settings.transcriber, "vad_enabled", e.value
-                        ),
-                    )
-                    ui.number(
-                        "VAD Threshold",
-                        value=self._settings.transcriber.vad_threshold,
-                        min=0.0,
-                        max=1.0,
-                        step=0.1,
-                        on_change=lambda e: setattr(
-                            self._settings.transcriber, "vad_threshold", float(e.value)
-                        ),
-                    )
 
         return container
 
