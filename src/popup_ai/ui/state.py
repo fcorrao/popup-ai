@@ -40,7 +40,7 @@ class StageState:
 class UIState:
     """Central state management for the admin UI."""
 
-    STAGES = ["audio_ingest", "transcriber", "annotator", "overlay"]
+    STAGES = ["audio_ingest", "transcriber", "annotator", "overlay", "diagnostics"]
 
     # Maps event_type to (stage, buffer_type) for routing
     EVENT_ROUTING: dict[str, tuple[str, str]] = {

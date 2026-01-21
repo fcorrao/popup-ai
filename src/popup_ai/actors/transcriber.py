@@ -52,6 +52,8 @@ class TranscriberActor:
         self._chunks_with_speech = 0
         self._chunks_without_speech = 0
         self._logger = logging.getLogger("popup_ai.actors.transcriber")
+        self._last_ui_event_time = 0.0
+        self._ui_event_interval = 1.0  # Only emit UI events every 1 second
 
     def get_status(self) -> ActorStatus:
         """Get current actor status."""
@@ -181,12 +183,15 @@ class TranscriberActor:
         # Calculate duration: bytes / (sample_rate * channels * bytes_per_sample)
         duration_s = len(chunk.data) / (chunk.sample_rate * chunk.channels * 2)
         self._buffer_duration_s += duration_s
-        # Publish audio_received event for UI
-        self._publish_ui_event("audio_received", {
-            "bytes": len(chunk.data),
-            "duration_s": round(duration_s, 3),
-            "buffer_duration_s": round(self._buffer_duration_s, 2),
-        })
+        # Throttle UI events to reduce WebSocket traffic
+        now = time.time()
+        if now - self._last_ui_event_time >= self._ui_event_interval:
+            self._last_ui_event_time = now
+            self._publish_ui_event("audio_received", {
+                "bytes": len(chunk.data),
+                "duration_s": round(duration_s, 3),
+                "buffer_duration_s": round(self._buffer_duration_s, 2),
+            })
 
     async def _process_buffer(self) -> None:
         """Process accumulated audio buffer."""

@@ -71,7 +71,10 @@ class OverlayActor:
         # Slot management - discovered from OBS, not auto-created
         self._discovered_slots: list[int] = []  # Sorted list of available slot numbers
         self._slot_item_ids: dict[int, int] = {}  # slot -> OBS sceneItemId (for visibility control)
-        self._slot_widths: dict[int, float] = {}  # slot -> viewport width in pixels (for scroll calc)
+        self._slot_dimensions: dict[int, tuple[float, float]] = {}  # slot -> (width, height)
+        self._slot_has_scroll_filter: dict[int, bool] = {}  # slot -> whether scroll filter exists
+        self._slot_has_chatlog_mode: dict[int, bool] = {}  # slot -> whether chatlog mode is enabled
+        self._chatlog_initialized: set[int] = set()  # chatlog slots that have had first write (clear then append)
         self._active_slots: dict[int, dict] = {}  # slot -> {annotation, hide_at}
         self._annotation_queue: list[Annotation] = []  # Queue for when all slots are busy
 
@@ -273,7 +276,10 @@ class OverlayActor:
 
         self._discovered_slots = []
         self._slot_item_ids = {}
-        self._slot_widths = {}
+        self._slot_dimensions = {}
+        self._slot_has_scroll_filter = {}
+        self._slot_has_chatlog_mode = {}
+        self._chatlog_initialized = set()
 
         # First check if the target scene exists
         try:
@@ -323,15 +329,27 @@ class OverlayActor:
                 f"Discovered {len(self._discovered_slots)} overlay slot(s): "
                 f"{['popup-ai-slot-' + str(s) for s in self._discovered_slots]}"
             )
-            # Get width of each slot for scroll speed calculation, and hide them
+            # Get dimensions, check for scroll filter and chatlog mode on each slot
             for slot in self._discovered_slots:
+                source_name = f"popup-ai-slot-{slot}"
                 item_id = self._slot_item_ids.get(slot)
                 if item_id:
-                    width = self._get_slot_width(item_id)
-                    self._slot_widths[slot] = width
-                    self._logger.debug(f"Slot {slot} width: {width}px")
-                await self._set_slot_visible(slot, False)
-            self._logger.debug("All slots hidden on discovery")
+                    width, height = self._get_slot_dimensions(item_id)
+                    self._slot_dimensions[slot] = (width, height)
+                    has_scroll = self._has_scroll_filter(source_name)
+                    self._slot_has_scroll_filter[slot] = has_scroll
+                    has_chatlog = self._has_chatlog_mode(source_name)
+                    self._slot_has_chatlog_mode[slot] = has_chatlog
+                    orientation = "wide" if width > height else "tall" if height > width else "square"
+                    self._logger.debug(
+                        f"Slot {slot}: {width:.0f}x{height:.0f}px ({orientation}), "
+                        f"scroll={'yes' if has_scroll else 'no'}, "
+                        f"chatlog={'yes' if has_chatlog else 'no'}"
+                    )
+                # Chatlog sources stay visible; others start hidden
+                if not self._slot_has_chatlog_mode.get(slot, False):
+                    await self._set_slot_visible(slot, False)
+            self._logger.debug("Non-chatlog slots hidden on discovery")
         else:
             self._logger.warning(
                 f"No 'popup-ai-slot-*' sources found in scene '{self.config.scene_name}'. "
@@ -453,17 +471,21 @@ class OverlayActor:
             self._logger.warning(f"No scene item ID for slot {slot}, cannot set visibility")
             return
 
-        try:
+        def _set_enabled():
             self._obs_client.set_scene_item_enabled(
                 scene_name=self.config.scene_name,
                 item_id=item_id,
                 enabled=visible,
             )
+
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _set_enabled)
         except Exception as e:
             self._handle_connection_error("set_visibility", e)
 
-    def _get_slot_width(self, item_id: int) -> float:
-        """Get the width of a slot's source from OBS.
+    def _get_slot_dimensions(self, item_id: int) -> tuple[float, float]:
+        """Get the width and height of a slot's source from OBS.
 
         Uses GetSceneItemTransform to get the source bounds.
         Falls back to config default if not discoverable.
@@ -472,129 +494,242 @@ class OverlayActor:
             item_id: The OBS scene item ID
 
         Returns:
-            Width in pixels
+            Tuple of (width, height) in pixels
         """
+        default_width = float(self.config.scroll_viewport_width_px)
+        default_height = default_width  # Square fallback
+
         if not self._obs_client or not self._obs_connected:
-            return self.config.scroll_viewport_width_px
+            return (default_width, default_height)
 
         try:
             transform = self._obs_client.get_scene_item_transform(
                 scene_name=self.config.scene_name,
                 item_id=item_id,
             )
-            # The transform has sourceWidth (base) and width (after scale)
-            # We want the displayed width
+            # The transform has sourceWidth/sourceHeight (base) and width/height (after scale)
+            # We want the displayed dimensions
             if hasattr(transform, "scene_item_transform"):
                 t = transform.scene_item_transform
-                # Try to get the bounded/cropped width first
-                width = t.get("width") or t.get("sourceWidth")
-                if width and width > 0:
-                    return float(width)
+                # Try to get the bounded/cropped dimensions first
+                width = t.get("width") or t.get("sourceWidth") or default_width
+                height = t.get("height") or t.get("sourceHeight") or default_height
+                if width > 0 and height > 0:
+                    return (float(width), float(height))
         except Exception as e:
-            self._logger.debug(f"Could not get slot width from OBS: {e}")
+            self._logger.debug(f"Could not get slot dimensions from OBS: {e}")
 
-        return self.config.scroll_viewport_width_px
+        return (default_width, default_height)
 
-    def _calculate_scroll_speed(self, text: str, viewport_width: float, duration_ms: int) -> float:
-        """Calculate the scroll speed needed for text to fully traverse the viewport.
-
-        The text needs to:
-        1. Enter from the right (travel = text_width to be fully visible)
-        2. Exit on the left (travel = viewport_width to fully exit)
-
-        Total travel = text_width + viewport_width
-        Speed = total_travel / duration
+    def _has_scroll_filter(self, source_name: str) -> bool:
+        """Check if a source has a scroll filter applied.
 
         Args:
-            text: The text to display
-            viewport_width: Width of the visible area in pixels
-            duration_ms: How long the annotation will be visible
+            source_name: The OBS source name
 
         Returns:
-            Scroll speed in pixels per second, clamped to min/max config values
+            True if scroll filter exists, False otherwise
         """
-        # Estimate text width based on character count
-        text_width = len(text) * self.config.scroll_char_width_px
+        if not self._obs_client or not self._obs_connected:
+            return False
 
-        # Total distance the text needs to travel
-        total_travel = text_width + viewport_width
+        try:
+            filters = self._obs_client.get_source_filter_list(source_name)
+            if hasattr(filters, "filters"):
+                for f in filters.filters:
+                    filter_name = f.get("filterName", "")
+                    if filter_name == self.config.scroll_filter_name:
+                        return True
+        except Exception as e:
+            self._logger.debug(f"Could not check filters for {source_name}: {e}")
 
-        # Calculate speed (pixels per second)
-        duration_s = duration_ms / 1000.0
-        if duration_s <= 0:
-            return self.config.scroll_min_speed
+        return False
 
-        speed = total_travel / duration_s
+    def _has_chatlog_mode(self, source_name: str) -> bool:
+        """Check if a text source has chatlog mode enabled.
 
-        # Clamp to configured min/max
-        speed = max(self.config.scroll_min_speed, min(speed, self.config.scroll_max_speed))
+        Chatlog mode is a GDI+ text source option that makes text scroll up
+        as new lines are added, keeping only the most recent N lines.
 
-        return speed
+        Args:
+            source_name: The OBS source name
 
-    def _set_scroll_filter_speed(self, slot: int, speed: float) -> None:
-        """Update the scroll filter speed for a slot.
+        Returns:
+            True if chatlog mode is enabled, False otherwise
+        """
+        if not self._obs_client or not self._obs_connected:
+            return False
+
+        try:
+            settings = self._obs_client.get_input_settings(source_name)
+            if hasattr(settings, "input_settings"):
+                # GDI+ text source uses 'chatlog' boolean setting
+                return bool(settings.input_settings.get("chatlog", False))
+        except Exception as e:
+            self._logger.debug(f"Could not check chatlog mode for {source_name}: {e}")
+
+        return False
+
+    def _get_slot_text(self, slot: int) -> str:
+        """Get the current text content of a slot's source.
 
         Args:
             slot: Slot number
-            speed: Scroll speed in pixels per second (positive = scroll left)
+
+        Returns:
+            Current text content, or empty string if not readable
+        """
+        if not self._obs_client or not self._obs_connected:
+            return ""
+
+        source_name = f"popup-ai-slot-{slot}"
+
+        try:
+            settings = self._obs_client.get_input_settings(source_name)
+            if hasattr(settings, "input_settings"):
+                return settings.input_settings.get("text", "")
+        except Exception as e:
+            self._logger.debug(f"Could not read text from slot {slot}: {e}")
+
+        return ""
+
+    def _calculate_display_duration(self, text: str) -> int:
+        """Calculate how long to display text based on reading time.
+
+        Uses a simple heuristic: longer text = longer display time.
+        Duration is based on characters-per-second reading rate with a minimum floor.
+
+        Args:
+            text: The text to display
+
+        Returns:
+            Display duration in milliseconds
+        """
+        # Calculate reading time based on text length
+        reading_time_ms = int((len(text) / self.config.chars_per_second) * 1000)
+
+        # Apply minimum floor
+        duration_ms = max(reading_time_ms, self.config.min_display_ms)
+
+        return duration_ms
+
+    async def _set_scroll_filter_speed(self, slot: int, speed: float) -> None:
+        """Update the scroll filter speed for a slot.
+
+        Chooses scroll direction based on source dimensions:
+        - Horizontal scroll (speed_x) if width > height (wide/landscape)
+        - Vertical scroll (speed_y) if height > width (tall/portrait)
+        - Skips entirely if no scroll filter exists on the source
+
+        Args:
+            slot: Slot number
+            speed: Scroll speed in pixels per second (positive = scroll left/up)
         """
         if not self._obs_client or not self._obs_connected:
             return
 
+        # Skip if no scroll filter on this slot
+        if not self._slot_has_scroll_filter.get(slot, False):
+            self._logger.debug(f"Slot {slot} has no scroll filter, skipping scroll setup")
+            return
+
         source_name = f"popup-ai-slot-{slot}"
-        try:
+
+        # Determine scroll direction based on dimensions
+        width, height = self._slot_dimensions.get(slot, (1.0, 1.0))
+        if width > height:
+            # Wide/landscape source - horizontal scroll
+            filter_settings = {"speed_x": speed, "speed_y": 0.0}
+            direction = "horizontal"
+        else:
+            # Tall/portrait or square source - vertical scroll
+            filter_settings = {"speed_x": 0.0, "speed_y": speed}
+            direction = "vertical"
+
+        def _set_filter():
             self._obs_client.set_source_filter_settings(
                 source_name=source_name,
                 filter_name=self.config.scroll_filter_name,
-                filter_settings={"speed_x": speed},
+                filter_settings=filter_settings,
                 overlay=True,  # Merge with existing settings
             )
+
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _set_filter)
+            self._logger.debug(f"Slot {slot}: {direction} scroll at {speed:.1f}px/s")
         except Exception as e:
-            # Filter might not exist - that's OK, just log debug
             self._logger.debug(f"Could not set scroll filter for slot {slot}: {e}")
 
     async def _show_in_slot(self, slot: int, annotation: Annotation) -> None:
         """Actually display an annotation in a specific slot.
 
-        Calculates scroll speed based on text length and duration,
-        updates the text content, sets scroll filter, and makes the slot visible.
+        Uses a fixed comfortable scroll speed and calculates duration from text length.
+        Longer text = longer display time (not faster scrolling).
+
+        If chatlog mode is enabled on the source, appends text instead of replacing.
         """
-        # Prepend spaces so the first character doesn't scroll off immediately
-        text = f"    {annotation.term}: {annotation.explanation}"
+        # Format the annotation text
+        new_text = f"[ {annotation.term} ] {annotation.explanation}"
 
-        # Store slot info
-        self._active_slots[slot] = {
-            "annotation": annotation,
-            "hide_at": time.time() * 1000 + annotation.display_duration_ms,
-        }
+        # Check if this slot uses chatlog mode (append) or replace mode
+        is_chatlog = self._slot_has_chatlog_mode.get(slot, False)
 
-        # Update OBS source text AND make visible
+        if is_chatlog:
+            # Chatlog mode: first write clears existing text, subsequent writes append
+            if slot in self._chatlog_initialized:
+                # Subsequent write: append with blank line separator
+                current_text = self._get_slot_text(slot)
+                if current_text:
+                    text = f"{current_text}\n\n{new_text}"
+                else:
+                    text = new_text
+            else:
+                # First write: start fresh (ignore any existing text)
+                text = new_text
+                self._chatlog_initialized.add(slot)
+        else:
+            # Replace mode: prepend spaces so text doesn't scroll off immediately
+            text = f"    {new_text}"
+
+        # Calculate duration based on text length (override annotation's duration)
+        display_duration_ms = self._calculate_display_duration(new_text)
+
+        # For non-chatlog slots, track as active so we know when to hide/free them
+        # Chatlog slots are always available for appending, never "busy"
+        if not is_chatlog:
+            self._active_slots[slot] = {
+                "annotation": annotation,
+                "hide_at": time.time() * 1000 + display_duration_ms,
+            }
+
+        # Update OBS source text (and make visible for non-chatlog)
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
             try:
-                # Calculate scroll speed based on text length and duration
-                viewport_width = self._slot_widths.get(
-                    slot, self.config.scroll_viewport_width_px
-                )
-                scroll_speed = self._calculate_scroll_speed(
-                    text, viewport_width, annotation.display_duration_ms
-                )
+                # Use fixed comfortable scroll speed from config (only for non-chatlog)
+                if not is_chatlog:
+                    scroll_speed = self.config.scroll_speed_px_s
+                    await self._set_scroll_filter_speed(slot, scroll_speed)
 
-                # Set scroll filter speed before showing
-                self._set_scroll_filter_speed(slot, scroll_speed)
+                # Update the text content (run in executor to not block)
+                def _set_text():
+                    self._obs_client.set_input_settings(
+                        source_name,
+                        {"text": text},
+                        True,
+                    )
 
-                # Update the text content
-                self._obs_client.set_input_settings(
-                    source_name,
-                    {"text": text},
-                    True,
-                )
-                # Make the slot visible
-                await self._set_slot_visible(slot, True)
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, _set_text)
 
+                # Make the slot visible (chatlog sources stay always visible)
+                if not is_chatlog:
+                    await self._set_slot_visible(slot, True)
+
+                mode = "chatlog/append" if is_chatlog else "scroll/replace"
                 self._logger.debug(
-                    f"Slot {slot}: text={len(text)} chars, "
-                    f"viewport={viewport_width}px, speed={scroll_speed:.1f}px/s"
+                    f"Slot {slot}: {len(text)} chars ({mode}), duration={display_duration_ms}ms"
                 )
             except Exception as e:
                 self._handle_connection_error("display_annotation", e)
@@ -604,6 +739,7 @@ class OverlayActor:
             "slot": slot,
             "term": annotation.term,
             "explanation": annotation.explanation,
+            "duration_ms": display_duration_ms,
         })
         self._logger.debug(f"Displayed annotation in slot {slot}: {annotation.term}")
 
@@ -613,7 +749,12 @@ class OverlayActor:
         The text remains in place but the element is made invisible.
         This is more efficient than clearing text since we'll just
         update the text and show again on next annotation.
+
+        Chatlog sources are never hidden - they stay always visible.
         """
+        # Chatlog sources stay always visible
+        if self._slot_has_chatlog_mode.get(slot, False):
+            return
         await self._set_slot_visible(slot, False)
         self._publish_ui_event("clear", {"slot": slot})
 
@@ -641,16 +782,15 @@ class OverlayActor:
 
     # ========== Public Methods for Direct Control ==========
 
-    async def send_text(self, slot: int, text: str, duration_ms: int | None = None) -> bool:
+    async def send_text(self, slot: int, text: str) -> bool:
         """Send text directly to an OBS overlay slot.
 
         This bypasses the normal annotation flow and directly updates the OBS source.
-        Calculates scroll speed, updates text, and makes the slot visible.
+        If chatlog mode is enabled on the source, appends text instead of replacing.
 
         Args:
             slot: Slot number (must be one of the discovered slots)
             text: Text to display
-            duration_ms: Optional duration for scroll speed calculation (defaults to config)
 
         Returns:
             True if text was sent successfully, False otherwise
@@ -663,37 +803,61 @@ class OverlayActor:
 
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
-            # Prepend spaces so the first character doesn't scroll off immediately
-            padded_text = f"    {text}"
+
+            # Check if this slot uses chatlog mode (append) or replace mode
+            is_chatlog = self._slot_has_chatlog_mode.get(slot, False)
+
+            if is_chatlog:
+                # Chatlog mode: first write clears existing text, subsequent writes append
+                if slot in self._chatlog_initialized:
+                    # Subsequent write: append with blank line separator
+                    current_text = self._get_slot_text(slot)
+                    if current_text:
+                        final_text = f"{current_text}\n\n{text}"
+                    else:
+                        final_text = text
+                else:
+                    # First write: start fresh (ignore any existing text)
+                    final_text = text
+                    self._chatlog_initialized.add(slot)
+            else:
+                # Replace mode: prepend spaces so text doesn't scroll off immediately
+                final_text = f"    {text}"
+
             try:
-                # Calculate scroll speed based on text length (including padding)
-                viewport_width = self._slot_widths.get(
-                    slot, self.config.scroll_viewport_width_px
-                )
-                effective_duration = duration_ms or self.config.hold_duration_ms
-                scroll_speed = self._calculate_scroll_speed(
-                    padded_text, viewport_width, effective_duration
-                )
+                # Only set scroll filter for non-chatlog mode
+                if not is_chatlog:
+                    scroll_speed = self.config.scroll_speed_px_s
+                    await self._set_scroll_filter_speed(slot, scroll_speed)
 
-                # Set scroll filter speed
-                self._set_scroll_filter_speed(slot, scroll_speed)
+                # Update text content (run in executor to not block)
+                def _set_text():
+                    self._obs_client.set_input_settings(
+                        source_name,
+                        {"text": final_text},
+                        True,
+                    )
 
-                # Update text content
-                self._obs_client.set_input_settings(
-                    source_name,
-                    {"text": padded_text},
-                    True,
-                )
-                # Make the slot visible
-                await self._set_slot_visible(slot, True)
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, _set_text)
 
+                # Make the slot visible (chatlog sources stay always visible)
+                if not is_chatlog:
+                    await self._set_slot_visible(slot, True)
+
+                # Calculate duration for UI reporting
+                display_duration_ms = self._calculate_display_duration(text)
+
+                mode = "chatlog/append" if is_chatlog else "scroll/replace"
                 self._publish_ui_event("display", {
                     "slot": slot,
                     "term": text[:20] if len(text) > 20 else text,
                     "explanation": "",
                     "direct": True,
+                    "duration_ms": display_duration_ms,
+                    "mode": mode,
                 })
-                self._logger.debug(f"Direct text sent to slot {slot}: {text[:30]}...")
+                self._logger.debug(f"Direct text ({mode}) to slot {slot}: {text[:30]}...")
                 return True
             except Exception as e:
                 self._handle_connection_error("send_text", e)

@@ -16,9 +16,10 @@ class AudioIngestConfig(BaseSettings):
 
     srt_port: int = Field(default=9998, description="SRT listener port")
     srt_latency_ms: int = Field(default=200, description="SRT latency in milliseconds")
+    srt_rcvbuf_mb: int = Field(default=64, description="SRT receive buffer size in MB")
     sample_rate: int = Field(default=16000, description="Audio sample rate in Hz")
     channels: int = Field(default=1, description="Number of audio channels")
-    chunk_duration_ms: int = Field(default=100, description="Audio chunk duration in ms")
+    chunk_duration_ms: int = Field(default=200, description="Audio chunk duration in ms")
     ffmpeg_threads: int = Field(default=4, description="FFmpeg thread count (limits CPU usage)")
 
 
@@ -29,7 +30,7 @@ class TranscriberConfig(BaseSettings):
 
     # Model settings
     model: str = Field(default="mlx-community/whisper-base-mlx", description="Whisper model")
-    chunk_length_s: float = Field(default=5.0, description="Audio chunk length for processing")
+    chunk_length_s: float = Field(default=2.0, description="Audio chunk length for processing")
     overlap_s: float = Field(default=0.5, description="Overlap between chunks")
     language: str | None = Field(default=None, description="Language code or None for auto")
 
@@ -114,15 +115,25 @@ class OverlayConfig(BaseSettings):
     scroll_viewport_width_px: int = Field(
         default=400, description="Fallback viewport width if not discoverable from OBS"
     )
-    scroll_char_width_px: float = Field(
-        default=12.0, description="Estimated pixels per character for text width calculation"
+    scroll_speed_px_s: float = Field(
+        default=100.0, description="Comfortable scroll speed (pixels/second) - duration scales with text length"
     )
-    scroll_min_speed: float = Field(
-        default=50.0, description="Minimum scroll speed (pixels/second)"
+    min_display_ms: int = Field(
+        default=3000, description="Minimum display duration in ms (floor for short text)"
     )
-    scroll_max_speed: float = Field(
-        default=500.0, description="Maximum scroll speed (pixels/second)"
+    chars_per_second: float = Field(
+        default=15.0, description="Estimated readable characters per second for duration calculation"
     )
+
+
+class DiagnosticsConfig(BaseSettings):
+    """Configuration for DiagnosticsActor."""
+
+    model_config = SettingsConfigDict(env_prefix="POPUP_DIAGNOSTICS_")
+
+    enabled: bool = Field(default=True, description="Enable diagnostics actor")
+    sample_interval: float = Field(default=1.0, description="Sample interval in seconds")
+    history_size: int = Field(default=300, description="Number of samples to keep (5 min at 1/sec)")
 
 
 class LogfireConfig(BaseSettings):
@@ -175,6 +186,7 @@ class Settings(BaseSettings):
     transcriber: TranscriberConfig = Field(default_factory=TranscriberConfig)
     annotator: AnnotatorConfig = Field(default_factory=AnnotatorConfig)
     overlay: OverlayConfig = Field(default_factory=OverlayConfig)
+    diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
     logfire: LogfireConfig = Field(default_factory=LogfireConfig)
 
 

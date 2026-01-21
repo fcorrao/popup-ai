@@ -48,6 +48,8 @@ def configure_logfire(
     )
     # Instrument pydantic-ai for automatic LLM call tracing
     logfire.instrument_pydantic_ai()
+    # Instrument httpx for custom client tracing (used by openai_compatible provider)
+    logfire.instrument_httpx(capture_all=True)
     _init_metrics()
     _configured = True
 
@@ -75,6 +77,7 @@ def ensure_logfire_configured() -> None:
         sampling=SamplingOptions(head=sample_rate),
     )
     logfire.instrument_pydantic_ai()
+    logfire.instrument_httpx(capture_all=True)
     _init_metrics()
     _configured = True
 

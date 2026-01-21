@@ -308,8 +308,14 @@ class AnnotatorActor:
 
         import httpx
 
-        # Create async httpx client for providers that support it
-        self._http_client = httpx.AsyncClient(timeout=30.0)
+        # Create async httpx client with explicit proxy disable
+        # Ray actors can have stale proxy settings that break connections
+        self._http_client = httpx.AsyncClient(
+            timeout=30.0,
+            proxy=None,
+            trust_env=False,  # Don't read proxy settings from environment
+        )
+        self._logger.info(f"Created httpx client with trust_env=False, proxy=None")
 
         if self.config.provider == "openai":
             api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -343,6 +349,7 @@ class AnnotatorActor:
             api_key = os.environ.get(api_key_var, "")
 
             base_url = self.config.base_url or "http://localhost:11434/v1"
+            self._logger.info(f"Connecting to openai_compatible: {base_url} model={self.config.model}")
 
             return OpenAIModel(
                 self.config.model,
@@ -561,3 +568,99 @@ class AnnotatorActor:
                 provider=new_config.provider,
                 model=new_config.model,
             )
+
+    # ========== Cache Management Methods ==========
+
+    def get_cache_entries(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        """Get cached annotation entries.
+
+        Returns list of dicts with: text_hash, term, explanation, created_at
+        """
+        if not self._db_conn:
+            return []
+
+        try:
+            cursor = self._db_conn.execute(
+                """SELECT text_hash, term, explanation, created_at
+                   FROM annotations
+                   ORDER BY created_at DESC
+                   LIMIT ? OFFSET ?""",
+                (limit, offset),
+            )
+            return [
+                {
+                    "text_hash": row[0],
+                    "term": row[1],
+                    "explanation": row[2],
+                    "created_at": row[3],
+                }
+                for row in cursor.fetchall()
+            ]
+        except Exception as e:
+            self._logger.warning(f"Failed to get cache entries: {e}")
+            return []
+
+    def get_cache_count(self) -> int:
+        """Get total number of cached entries."""
+        if not self._db_conn:
+            return 0
+
+        try:
+            cursor = self._db_conn.execute("SELECT COUNT(*) FROM annotations")
+            return cursor.fetchone()[0]
+        except Exception:
+            return 0
+
+    def delete_cache_entry(self, text_hash: str) -> bool:
+        """Delete a specific cache entry by text_hash."""
+        if not self._db_conn:
+            return False
+
+        try:
+            self._db_conn.execute(
+                "DELETE FROM annotations WHERE text_hash = ?",
+                (text_hash,),
+            )
+            self._db_conn.commit()
+            self._logger.info(f"Deleted cache entry: {text_hash}")
+            return True
+        except Exception as e:
+            self._logger.warning(f"Failed to delete cache entry: {e}")
+            return False
+
+    def clear_cache(self) -> int:
+        """Clear all cached annotations. Returns number of entries deleted."""
+        if not self._db_conn:
+            return 0
+
+        try:
+            cursor = self._db_conn.execute("SELECT COUNT(*) FROM annotations")
+            count = cursor.fetchone()[0]
+            self._db_conn.execute("DELETE FROM annotations")
+            self._db_conn.commit()
+            self._logger.info(f"Cleared {count} cache entries")
+            return count
+        except Exception as e:
+            self._logger.warning(f"Failed to clear cache: {e}")
+            return 0
+
+    def update_cache_entry(
+        self, text_hash: str, term: str, explanation: str
+    ) -> bool:
+        """Update an existing cache entry."""
+        if not self._db_conn:
+            return False
+
+        try:
+            self._db_conn.execute(
+                """UPDATE annotations
+                   SET term = ?, explanation = ?, created_at = ?
+                   WHERE text_hash = ?""",
+                (term, explanation, time.time(), text_hash),
+            )
+            self._db_conn.commit()
+            self._logger.info(f"Updated cache entry: {text_hash}")
+            return True
+        except Exception as e:
+            self._logger.warning(f"Failed to update cache entry: {e}")
+            return False

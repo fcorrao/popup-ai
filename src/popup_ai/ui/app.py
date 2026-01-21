@@ -14,6 +14,7 @@ from popup_ai.ui.state import UIState
 from popup_ai.ui.tabs import (
     AnnotatorTab,
     AudioIngestTab,
+    DiagnosticsTab,
     OverlayTab,
     OverviewTab,
     TranscriberTab,
@@ -95,6 +96,7 @@ class PipelineUI:
                 ui.tab("transcriber", label="Transcriber", icon="record_voice_over")
                 ui.tab("annotator", label="Annotator", icon="auto_awesome")
                 ui.tab("overlay", label="Overlay", icon="tv")
+                ui.tab("diagnostics", label="Diagnostics", icon="monitoring")
 
             # Tab panels
             with ui.tab_panels(tab_nav, value="overview").classes("w-full"):
@@ -134,6 +136,14 @@ class PipelineUI:
                     )
                     tabs["overlay"].build()
 
+                with ui.tab_panel("diagnostics"):
+                    tabs["diagnostics"] = DiagnosticsTab(
+                        state,
+                        self.settings,
+                        supervisor_getter=lambda: self.supervisor,
+                    )
+                    tabs["diagnostics"].build()
+
         # Per-client polling timers (capture local state/tabs in closures)
         async def poll_status():
             try:
@@ -158,7 +168,7 @@ class PipelineUI:
                 if "overview" in tabs:
                     tabs["overview"].update(all_statuses)
                 # Update individual tabs
-                for tab_name in ["audio_ingest", "transcriber", "annotator", "overlay"]:
+                for tab_name in ["audio_ingest", "transcriber", "annotator", "overlay", "diagnostics"]:
                     if tab_name in tabs and hasattr(tabs[tab_name], "update"):
                         tabs[tab_name].update()
             except Exception as e:
@@ -185,6 +195,7 @@ class PipelineUI:
                                     "annotation_received": "overlay",
                                     "display": "overlay",
                                     "clear": "overlay",
+                                    "sample": "diagnostics",
                                 }
                                 tab_name = event_to_tab.get(event.event_type)
                                 if tab_name and tab_name in tabs:

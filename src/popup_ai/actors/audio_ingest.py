@@ -197,6 +197,8 @@ class AudioIngestActor:
         self._ffmpeg_available = False
         self._ffmpeg_version: str | None = None
         self._logger = logging.getLogger("popup_ai.actors.audio_ingest")
+        self._last_ui_event_time = 0.0
+        self._ui_event_interval = 1.0  # Only emit UI events every 1 second
 
         # Check ffmpeg availability on init
         self._ffmpeg_available, self._ffmpeg_version = check_ffmpeg_available()
@@ -333,15 +335,18 @@ class AudioIngestActor:
     async def _start_ffmpeg(self) -> None:
         """Start ffmpeg subprocess for SRT capture."""
         latency_us = self.config.srt_latency_ms * 1000
-        srt_url = f"srt://0.0.0.0:{self.config.srt_port}?mode=listener&latency={latency_us}"
+        rcvbuf_bytes = self.config.srt_rcvbuf_mb * 1024 * 1024
+        srt_url = f"srt://0.0.0.0:{self.config.srt_port}?mode=listener&latency={latency_us}&rcvbuf={rcvbuf_bytes}"
 
         cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "info",  # Use info level for more diagnostic output
             "-threads", str(self.config.ffmpeg_threads),
+            "-fflags", "+discardcorrupt",  # Discard corrupt packets
             "-i", srt_url,
-            "-vn",  # No video
+            "-map", "0:a:0",  # Explicitly select only first audio stream (skip video demux)
+            "-vn",  # No video output
             "-acodec", "pcm_s16le",
             "-ar", str(self.config.sample_rate),
             "-ac", str(self.config.channels),
@@ -423,12 +428,15 @@ class AudioIngestActor:
                     self.output_queue.put_nowait(chunk)
                     self._chunks_sent += 1
                     self._bytes_processed += len(data)
-                    # Publish chunk_produced event for UI
-                    self._publish_ui_event("chunk_produced", {
-                        "bytes": len(data),
-                        "chunk_num": self._chunks_sent,
-                        "total_bytes": self._bytes_processed,
-                    })
+                    # Throttle UI events to reduce WebSocket traffic
+                    now = time.time()
+                    if now - self._last_ui_event_time >= self._ui_event_interval:
+                        self._last_ui_event_time = now
+                        self._publish_ui_event("chunk_produced", {
+                            "bytes": len(data),
+                            "chunk_num": self._chunks_sent,
+                            "total_bytes": self._bytes_processed,
+                        })
                 except Exception:
                     self._logger.debug("Output queue full, dropping chunk")
 

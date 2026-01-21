@@ -47,6 +47,14 @@ class AnnotatorTab:
         self._settings_status: ui.label | None = None
         self._local_settings_container: ui.column | None = None
         self._schema_code: ui.code | None = None
+        # Cache management
+        self._cache_count_label: ui.label | None = None
+        self._cache_table: ui.table | None = None
+        self._edit_dialog: ui.dialog | None = None
+        self._edit_hash: ui.label | None = None
+        self._edit_term: ui.input | None = None
+        self._edit_explanation: ui.textarea | None = None
+        self._editing_hash: str | None = None
 
     def build(self) -> ui.column:
         """Build and return the annotator tab content."""
@@ -65,22 +73,31 @@ class AnnotatorTab:
                 with ui.column().classes("gap-4 p-2 w-full"):
                     # Provider selection
                     with ui.row().classes("gap-4 w-full items-end"):
+                        provider_options = list(PROVIDER_MODELS.keys())
+                        current_provider = self._settings.annotator.provider
+                        # Ensure current provider is in options (for custom providers via env var)
+                        if current_provider and current_provider not in provider_options:
+                            provider_options.insert(0, current_provider)
                         self._provider_select = ui.select(
                             label="Provider",
-                            options=list(PROVIDER_MODELS.keys()),
-                            value=self._settings.annotator.provider,
+                            options=provider_options,
+                            value=current_provider,
                             on_change=self._handle_provider_change,
                         ).classes("w-48")
 
-                        # Model selection with suggestions
-                        initial_models = PROVIDER_MODELS.get(
+                        # Model selection with suggestions (allows custom input)
+                        initial_models = list(PROVIDER_MODELS.get(
                             self._settings.annotator.provider, []
-                        )
+                        ))
+                        # Ensure current model is in options (for custom models via env var)
+                        current_model = self._settings.annotator.model
+                        if current_model and current_model not in initial_models:
+                            initial_models.insert(0, current_model)
                         self._model_select = ui.select(
                             label="Model",
                             options=initial_models,
-                            value=self._settings.annotator.model,
-                            with_input=True,
+                            value=current_model,
+                            new_value_mode="add",  # Allow typing custom model names
                             on_change=self._handle_model_change,
                         ).classes("flex-1")
 
@@ -221,15 +238,63 @@ class AnnotatorTab:
                     )
                     self._output_viewer.build()
 
-            # Cache stats panel
-            with ui.card().classes("w-full"):
-                ui.label("LLM & Cache Status").classes("font-medium")
-                with ui.row().classes("gap-4 text-caption"):
-                    provider = self._settings.annotator.provider
-                    model = self._settings.annotator.model
-                    self._llm_label = ui.label(f"Provider: {provider}:{model}")
-                    self._cache_hits_label = ui.label("Cache Hits: 0")
-                    self._llm_calls_label = ui.label("LLM Calls: 0")
+            # Cache management panel
+            with ui.expansion("LLM & Cache Management", icon="storage").classes("w-full"):
+                with ui.column().classes("gap-4 p-2 w-full"):
+                    # Stats row
+                    with ui.row().classes("gap-4 text-caption items-center"):
+                        provider = self._settings.annotator.provider
+                        model = self._settings.annotator.model
+                        self._llm_label = ui.label(f"Provider: {provider}:{model}")
+                        self._cache_hits_label = ui.label("Cache Hits: 0")
+                        self._llm_calls_label = ui.label("LLM Calls: 0")
+                        self._cache_count_label = ui.label("Cached: 0")
+
+                    # Cache actions
+                    with ui.row().classes("gap-2"):
+                        ui.button(
+                            "Refresh",
+                            on_click=self._refresh_cache_view,
+                            icon="refresh",
+                        ).props("flat dense")
+                        ui.button(
+                            "Clear All Cache",
+                            on_click=self._handle_clear_cache,
+                            icon="delete_sweep",
+                        ).props("flat dense color=negative")
+
+                    # Cache entries table
+                    self._cache_table = ui.table(
+                        columns=[
+                            {"name": "term", "label": "Term", "field": "term", "align": "left"},
+                            {"name": "explanation", "label": "Explanation", "field": "explanation", "align": "left"},
+                            {"name": "created", "label": "Created", "field": "created", "align": "left"},
+                            {"name": "actions", "label": "", "field": "actions", "align": "center"},
+                        ],
+                        rows=[],
+                        row_key="text_hash",
+                    ).classes("w-full")
+                    self._cache_table.add_slot(
+                        "body-cell-actions",
+                        """
+                        <q-td :props="props">
+                            <q-btn flat dense icon="edit" @click="$parent.$emit('edit', props.row)" />
+                            <q-btn flat dense icon="delete" color="negative" @click="$parent.$emit('delete', props.row)" />
+                        </q-td>
+                        """,
+                    )
+                    self._cache_table.on("edit", self._handle_edit_cache_entry)
+                    self._cache_table.on("delete", self._handle_delete_cache_entry)
+
+                    # Edit dialog (hidden by default)
+                    with ui.dialog() as self._edit_dialog, ui.card().classes("w-96"):
+                        ui.label("Edit Cache Entry").classes("font-medium")
+                        self._edit_hash = ui.label("").classes("text-caption text-grey")
+                        self._edit_term = ui.input(label="Term").classes("w-full")
+                        self._edit_explanation = ui.textarea(label="Explanation").classes("w-full")
+                        with ui.row().classes("gap-2 justify-end"):
+                            ui.button("Cancel", on_click=self._edit_dialog.close).props("flat")
+                            ui.button("Save", on_click=self._handle_save_cache_edit).props("color=primary")
 
         return container
 
@@ -499,3 +564,125 @@ class AnnotatorTab:
 
         schema = get_annotation_schema()
         return json.dumps(schema, indent=2)
+
+    # ========== Cache Management Methods ==========
+
+    async def _refresh_cache_view(self) -> None:
+        """Refresh the cache entries table."""
+        if not self._supervisor_getter or not self._cache_table:
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            return
+
+        try:
+            import ray
+            from datetime import datetime
+
+            # Get cache entries
+            entries = ray.get(supervisor.get_cache_entries.remote(limit=50))
+            count = ray.get(supervisor.get_cache_count.remote())
+
+            # Update count label
+            if self._cache_count_label:
+                self._cache_count_label.set_text(f"Cached: {count}")
+
+            # Format rows for table
+            rows = []
+            for entry in entries:
+                created = datetime.fromtimestamp(entry["created_at"]).strftime("%m/%d %H:%M")
+                rows.append({
+                    "text_hash": entry["text_hash"],
+                    "term": entry["term"],
+                    "explanation": entry["explanation"][:80] + "..." if len(entry["explanation"]) > 80 else entry["explanation"],
+                    "full_explanation": entry["explanation"],
+                    "created": created,
+                })
+
+            self._cache_table.rows = rows
+            self._cache_table.update()
+
+        except Exception as ex:
+            ui.notify(f"Failed to refresh cache: {ex}", type="negative")
+
+    async def _handle_clear_cache(self) -> None:
+        """Clear all cache entries."""
+        if not self._supervisor_getter:
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            return
+
+        try:
+            import ray
+            count = ray.get(supervisor.clear_cache.remote())
+            ui.notify(f"Cleared {count} cache entries", type="positive")
+            await self._refresh_cache_view()
+        except Exception as ex:
+            ui.notify(f"Failed to clear cache: {ex}", type="negative")
+
+    def _handle_edit_cache_entry(self, e: Any) -> None:
+        """Open edit dialog for a cache entry."""
+        row = e.args
+        if not self._edit_dialog or not self._edit_hash or not self._edit_term or not self._edit_explanation:
+            return
+
+        self._editing_hash = row.get("text_hash")
+        self._edit_hash.set_text(f"Hash: {self._editing_hash}")
+        self._edit_term.set_value(row.get("term", ""))
+        self._edit_explanation.set_value(row.get("full_explanation", row.get("explanation", "")))
+        self._edit_dialog.open()
+
+    async def _handle_save_cache_edit(self) -> None:
+        """Save edited cache entry."""
+        if not self._supervisor_getter or not self._editing_hash:
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            return
+
+        if not self._edit_term or not self._edit_explanation:
+            return
+
+        try:
+            import ray
+            success = ray.get(supervisor.update_cache_entry.remote(
+                self._editing_hash,
+                self._edit_term.value,
+                self._edit_explanation.value,
+            ))
+
+            if success:
+                ui.notify("Cache entry updated", type="positive")
+                if self._edit_dialog:
+                    self._edit_dialog.close()
+                await self._refresh_cache_view()
+            else:
+                ui.notify("Failed to update cache entry", type="negative")
+        except Exception as ex:
+            ui.notify(f"Failed to update: {ex}", type="negative")
+
+    async def _handle_delete_cache_entry(self, e: Any) -> None:
+        """Delete a cache entry."""
+        row = e.args
+        text_hash = row.get("text_hash")
+        if not text_hash or not self._supervisor_getter:
+            return
+
+        supervisor = self._supervisor_getter()
+        if not supervisor:
+            return
+
+        try:
+            import ray
+            success = ray.get(supervisor.delete_cache_entry.remote(text_hash))
+            if success:
+                ui.notify(f"Deleted cache entry: {row.get('term')}", type="positive")
+                await self._refresh_cache_view()
+            else:
+                ui.notify("Failed to delete cache entry", type="negative")
+        except Exception as ex:
+            ui.notify(f"Failed to delete: {ex}", type="negative")

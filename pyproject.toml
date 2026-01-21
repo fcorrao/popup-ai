@@ -22,6 +22,7 @@ dependencies = [
     "nicegui>=3.5.0",
     "silero-vad>=5.1",
     "logfire>=4.19.0",
+    "psutil>=6.0",
 ]
 
 [project.optional-dependencies]

@@ -131,9 +131,13 @@ def format_annotation_event(event: UIEvent) -> str:
         return f"[{timestamp}] Input: {text}..."
     elif event.event_type == "annotation":
         term = event.data.get("term", "")
+        explanation = event.data.get("explanation", "")
         cache_hit = event.data.get("cache_hit", False)
         cache_str = " (cached)" if cache_hit else ""
-        return f"[{timestamp}] {term}{cache_str}"
+        # Truncate explanation if too long
+        if len(explanation) > 60:
+            explanation = explanation[:60] + "..."
+        return f"[{timestamp}] {term}: {explanation}{cache_str}"
     return f"[{timestamp}] {event.event_type}"
 
 

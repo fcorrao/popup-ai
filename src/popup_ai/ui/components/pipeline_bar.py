@@ -63,6 +63,13 @@ class PipelineBar:
                     self.settings.pipeline, "overlay_enabled", e.value
                 ),
             )
+            self._checkboxes["diagnostics"] = ui.checkbox(
+                "Diagnostics",
+                value=self.settings.diagnostics.enabled,
+                on_change=lambda e: setattr(
+                    self.settings.diagnostics, "enabled", e.value
+                ),
+            )
 
             ui.space()
 

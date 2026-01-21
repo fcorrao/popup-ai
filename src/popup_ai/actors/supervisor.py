@@ -75,6 +75,9 @@ class PipelineSupervisor:
         if self.settings.pipeline.overlay_enabled:
             await self._spawn_actor("overlay")
 
+        if self.settings.diagnostics.enabled:
+            await self._spawn_actor("diagnostics")
+
         # Start health monitor
         self._monitor_task = asyncio.create_task(self._health_monitor())
         self._logger.info("Pipeline supervisor started")
@@ -141,6 +144,14 @@ class PipelineSupervisor:
                     config=self.settings.overlay,
                     input_queue=self._queues["annotation"],
                     ui_queue=self._queues["ui"],
+                )
+            elif actor_type == "diagnostics":
+                from popup_ai.actors.diagnostics import DiagnosticsActor
+
+                actor = DiagnosticsActor.remote(
+                    ui_queue=self._queues["ui"],
+                    sample_interval=self.settings.diagnostics.sample_interval,
+                    history_size=self.settings.diagnostics.history_size,
                 )
             else:
                 raise ValueError(f"Unknown actor type: {actor_type}")
@@ -272,6 +283,54 @@ class PipelineSupervisor:
                 provider, model, system_prompt, prompt_template
             )
         )
+
+    # ========== Cache Management Methods ==========
+
+    def get_cache_entries(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        """Get cached annotation entries from annotator."""
+        if "annotator" not in self._actors:
+            return []
+        return ray.get(self._actors["annotator"].get_cache_entries.remote(limit, offset))
+
+    def get_cache_count(self) -> int:
+        """Get total number of cached entries."""
+        if "annotator" not in self._actors:
+            return 0
+        return ray.get(self._actors["annotator"].get_cache_count.remote())
+
+    def delete_cache_entry(self, text_hash: str) -> bool:
+        """Delete a specific cache entry."""
+        if "annotator" not in self._actors:
+            return False
+        return ray.get(self._actors["annotator"].delete_cache_entry.remote(text_hash))
+
+    def clear_cache(self) -> int:
+        """Clear all cached annotations. Returns count deleted."""
+        if "annotator" not in self._actors:
+            return 0
+        return ray.get(self._actors["annotator"].clear_cache.remote())
+
+    def update_cache_entry(self, text_hash: str, term: str, explanation: str) -> bool:
+        """Update an existing cache entry."""
+        if "annotator" not in self._actors:
+            return False
+        return ray.get(
+            self._actors["annotator"].update_cache_entry.remote(text_hash, term, explanation)
+        )
+
+    # ========== Diagnostics Methods ==========
+
+    def get_diagnostics_history(self, limit: int = 60) -> list[dict]:
+        """Get recent diagnostics samples."""
+        if "diagnostics" not in self._actors:
+            return []
+        return ray.get(self._actors["diagnostics"].get_history.remote(limit))
+
+    def get_diagnostics_latest(self) -> dict | None:
+        """Get the most recent diagnostics sample."""
+        if "diagnostics" not in self._actors:
+            return None
+        return ray.get(self._actors["diagnostics"].get_latest.remote())
 
     # ========== Test Injection Methods ==========
 
