@@ -74,6 +74,7 @@ class OverlayActor:
         self._slot_dimensions: dict[int, tuple[float, float]] = {}  # slot -> (width, height)
         self._slot_has_scroll_filter: dict[int, bool] = {}  # slot -> whether scroll filter exists
         self._slot_has_chatlog_mode: dict[int, bool] = {}  # slot -> whether chatlog mode is enabled
+        self._slot_is_browser_source: dict[int, bool] = {}  # slot -> whether it's a browser source
         self._chatlog_initialized: set[int] = set()  # chatlog slots that have had first write (clear then append)
         self._active_slots: dict[int, dict] = {}  # slot -> {annotation, hide_at}
         self._annotation_queue: list[Annotation] = []  # Queue for when all slots are busy
@@ -279,6 +280,7 @@ class OverlayActor:
         self._slot_dimensions = {}
         self._slot_has_scroll_filter = {}
         self._slot_has_chatlog_mode = {}
+        self._slot_is_browser_source = {}
         self._chatlog_initialized = set()
 
         # First check if the target scene exists
@@ -329,27 +331,38 @@ class OverlayActor:
                 f"Discovered {len(self._discovered_slots)} overlay slot(s): "
                 f"{['popup-ai-slot-' + str(s) for s in self._discovered_slots]}"
             )
-            # Get dimensions, check for scroll filter and chatlog mode on each slot
+            # Get dimensions, check source type and settings on each slot
             for slot in self._discovered_slots:
                 source_name = f"popup-ai-slot-{slot}"
                 item_id = self._slot_item_ids.get(slot)
                 if item_id:
                     width, height = self._get_slot_dimensions(item_id)
                     self._slot_dimensions[slot] = (width, height)
-                    has_scroll = self._has_scroll_filter(source_name)
-                    self._slot_has_scroll_filter[slot] = has_scroll
-                    has_chatlog = self._has_chatlog_mode(source_name)
-                    self._slot_has_chatlog_mode[slot] = has_chatlog
-                    orientation = "wide" if width > height else "tall" if height > width else "square"
-                    self._logger.debug(
-                        f"Slot {slot}: {width:.0f}x{height:.0f}px ({orientation}), "
-                        f"scroll={'yes' if has_scroll else 'no'}, "
-                        f"chatlog={'yes' if has_chatlog else 'no'}"
-                    )
-                # Chatlog sources stay visible; others start hidden
-                if not self._slot_has_chatlog_mode.get(slot, False):
+                    is_browser = self._is_browser_source(source_name)
+                    self._slot_is_browser_source[slot] = is_browser
+
+                    if is_browser:
+                        # Browser sources handle their own display via custom events
+                        self._logger.debug(f"Slot {slot}: browser source ({width:.0f}x{height:.0f}px)")
+                    else:
+                        # Text source - check scroll filter and chatlog mode
+                        has_scroll = self._has_scroll_filter(source_name)
+                        self._slot_has_scroll_filter[slot] = has_scroll
+                        has_chatlog = self._has_chatlog_mode(source_name)
+                        self._slot_has_chatlog_mode[slot] = has_chatlog
+                        orientation = "wide" if width > height else "tall" if height > width else "square"
+                        self._logger.debug(
+                            f"Slot {slot}: text source ({width:.0f}x{height:.0f}px, {orientation}), "
+                            f"scroll={'yes' if has_scroll else 'no'}, "
+                            f"chatlog={'yes' if has_chatlog else 'no'}"
+                        )
+
+                # Browser and chatlog sources stay visible; others start hidden
+                is_browser = self._slot_is_browser_source.get(slot, False)
+                is_chatlog = self._slot_has_chatlog_mode.get(slot, False)
+                if not is_browser and not is_chatlog:
                     await self._set_slot_visible(slot, False)
-            self._logger.debug("Non-chatlog slots hidden on discovery")
+            self._logger.debug("Standard text slots hidden on discovery")
         else:
             self._logger.warning(
                 f"No 'popup-ai-slot-*' sources found in scene '{self.config.scene_name}'. "
@@ -371,6 +384,7 @@ class OverlayActor:
                     continue
 
                 if isinstance(annotation, Annotation):
+                    self._logger.info(f"Received annotation from queue: {annotation.term}")
                     # Publish annotation_received event for UI
                     self._publish_ui_event("annotation_received", {
                         "term": annotation.term,
@@ -436,6 +450,8 @@ class OverlayActor:
         if not self._discovered_slots:
             self._logger.warning("No overlay slots available, cannot display annotation")
             return
+
+        self._logger.info(f"_display_annotation: discovered_slots={self._discovered_slots}, active_slots={list(self._active_slots.keys())}")
 
         # Find first available slot
         slot = self._get_first_available_slot()
@@ -570,6 +586,28 @@ class OverlayActor:
 
         return False
 
+    def _is_browser_source(self, source_name: str) -> bool:
+        """Check if a source is a browser source.
+
+        Args:
+            source_name: The OBS source name
+
+        Returns:
+            True if it's a browser source, False otherwise
+        """
+        if not self._obs_client or not self._obs_connected:
+            return False
+
+        try:
+            # get_input_settings returns inputKind which tells us the source type
+            settings = self._obs_client.get_input_settings(source_name)
+            if hasattr(settings, "input_kind"):
+                return settings.input_kind == "browser_source"
+        except Exception as e:
+            self._logger.debug(f"Could not check source type for {source_name}: {e}")
+
+        return False
+
     def _get_slot_text(self, slot: int) -> str:
         """Get the current text content of a slot's source.
 
@@ -664,15 +702,28 @@ class OverlayActor:
     async def _show_in_slot(self, slot: int, annotation: Annotation) -> None:
         """Actually display an annotation in a specific slot.
 
-        Uses a fixed comfortable scroll speed and calculates duration from text length.
-        Longer text = longer display time (not faster scrolling).
-
-        If chatlog mode is enabled on the source, appends text instead of replacing.
+        Routes to appropriate display method based on source type:
+        - Browser source: Broadcast via OBS custom event (browser handles display)
+        - Text source: Update text content directly
         """
-        # Format the annotation text
-        new_text = f"[ {annotation.term} ] {annotation.explanation}"
+        is_browser = self._slot_is_browser_source.get(slot, False)
+        self._logger.info(f"_show_in_slot({slot}): is_browser={is_browser}, term={annotation.term}")
 
-        # Check if this slot uses chatlog mode (append) or replace mode
+        if is_browser:
+            # Browser source: broadcast via custom event, browser handles display
+            self._broadcast_annotation(annotation.term, annotation.explanation)
+            self._annotations_displayed += 1
+            self._publish_ui_event("display", {
+                "slot": slot,
+                "term": annotation.term,
+                "explanation": annotation.explanation,
+                "source_type": "browser",
+            })
+            self._logger.debug(f"Broadcast annotation to browser slot {slot}: {annotation.term}")
+            return
+
+        # Text source: update text content directly
+        new_text = f"[ {annotation.term} ] {annotation.explanation}"
         is_chatlog = self._slot_has_chatlog_mode.get(slot, False)
 
         if is_chatlog:
@@ -692,27 +743,26 @@ class OverlayActor:
             # Replace mode: prepend spaces so text doesn't scroll off immediately
             text = f"    {new_text}"
 
-        # Calculate duration based on text length (override annotation's duration)
+        # Calculate duration based on text length
         display_duration_ms = self._calculate_display_duration(new_text)
 
         # For non-chatlog slots, track as active so we know when to hide/free them
-        # Chatlog slots are always available for appending, never "busy"
         if not is_chatlog:
             self._active_slots[slot] = {
                 "annotation": annotation,
                 "hide_at": time.time() * 1000 + display_duration_ms,
             }
 
-        # Update OBS source text (and make visible for non-chatlog)
+        # Update OBS source text
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
             try:
-                # Use fixed comfortable scroll speed from config (only for non-chatlog)
+                # Use scroll filter for non-chatlog text sources
                 if not is_chatlog:
                     scroll_speed = self.config.scroll_speed_px_s
                     await self._set_scroll_filter_speed(slot, scroll_speed)
 
-                # Update the text content (run in executor to not block)
+                # Update the text content
                 def _set_text():
                     self._obs_client.set_input_settings(
                         source_name,
@@ -740,6 +790,7 @@ class OverlayActor:
             "term": annotation.term,
             "explanation": annotation.explanation,
             "duration_ms": display_duration_ms,
+            "source_type": "text",
         })
         self._logger.debug(f"Displayed annotation in slot {slot}: {annotation.term}")
 
@@ -780,13 +831,43 @@ class OverlayActor:
         except Exception:
             pass
 
+    def _broadcast_annotation(self, term: str, definition: str) -> None:
+        """Broadcast annotation to browser sources via OBS BroadcastCustomEvent.
+
+        This allows browser sources in OBS to receive annotations by listening
+        to the OBS WebSocket for custom events.
+
+        Args:
+            term: The term being defined
+            definition: The definition/explanation
+        """
+        if not self._obs_client or not self._obs_connected:
+            self._logger.warning(f"Cannot broadcast: obs_client={self._obs_client is not None}, connected={self._obs_connected}")
+            return
+
+        def _broadcast():
+            self._obs_client.broadcast_custom_event({
+                "eventData": {
+                    "term": term,
+                    "definition": definition,
+                    "timestamp": time.time(),
+                }
+            })
+
+        try:
+            _broadcast()
+            self._logger.info(f"Broadcast annotation to browser: [{term}] {definition[:50]}...")
+        except Exception as e:
+            self._logger.error(f"Failed to broadcast custom event: {e}")
+
     # ========== Public Methods for Direct Control ==========
 
     async def send_text(self, slot: int, text: str) -> bool:
         """Send text directly to an OBS overlay slot.
 
-        This bypasses the normal annotation flow and directly updates the OBS source.
-        If chatlog mode is enabled on the source, appends text instead of replacing.
+        Routes to appropriate method based on source type:
+        - Browser source: Broadcast via OBS custom event
+        - Text source: Update text content directly
 
         Args:
             slot: Slot number (must be one of the discovered slots)
@@ -801,23 +882,35 @@ class OverlayActor:
             )
             return False
 
+        is_browser = self._slot_is_browser_source.get(slot, False)
+
+        if is_browser:
+            # Browser source: broadcast via custom event
+            self._broadcast_annotation("", text)
+            self._publish_ui_event("display", {
+                "slot": slot,
+                "term": text[:20] if len(text) > 20 else text,
+                "explanation": "",
+                "direct": True,
+                "source_type": "browser",
+            })
+            self._logger.debug(f"Broadcast direct text to browser slot {slot}: {text[:30]}...")
+            return True
+
+        # Text source: update content directly
         if self._obs_client and self._obs_connected:
             source_name = f"popup-ai-slot-{slot}"
-
-            # Check if this slot uses chatlog mode (append) or replace mode
             is_chatlog = self._slot_has_chatlog_mode.get(slot, False)
 
             if is_chatlog:
                 # Chatlog mode: first write clears existing text, subsequent writes append
                 if slot in self._chatlog_initialized:
-                    # Subsequent write: append with blank line separator
                     current_text = self._get_slot_text(slot)
                     if current_text:
                         final_text = f"{current_text}\n\n{text}"
                     else:
                         final_text = text
                 else:
-                    # First write: start fresh (ignore any existing text)
                     final_text = text
                     self._chatlog_initialized.add(slot)
             else:
@@ -825,12 +918,10 @@ class OverlayActor:
                 final_text = f"    {text}"
 
             try:
-                # Only set scroll filter for non-chatlog mode
                 if not is_chatlog:
                     scroll_speed = self.config.scroll_speed_px_s
                     await self._set_scroll_filter_speed(slot, scroll_speed)
 
-                # Update text content (run in executor to not block)
                 def _set_text():
                     self._obs_client.set_input_settings(
                         source_name,
@@ -841,13 +932,10 @@ class OverlayActor:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, _set_text)
 
-                # Make the slot visible (chatlog sources stay always visible)
                 if not is_chatlog:
                     await self._set_slot_visible(slot, True)
 
-                # Calculate duration for UI reporting
                 display_duration_ms = self._calculate_display_duration(text)
-
                 mode = "chatlog/append" if is_chatlog else "scroll/replace"
                 self._publish_ui_event("display", {
                     "slot": slot,
@@ -855,6 +943,7 @@ class OverlayActor:
                     "explanation": "",
                     "direct": True,
                     "duration_ms": display_duration_ms,
+                    "source_type": "text",
                     "mode": mode,
                 })
                 self._logger.debug(f"Direct text ({mode}) to slot {slot}: {text[:30]}...")
@@ -926,3 +1015,14 @@ class OverlayActor:
             Sorted list of slot numbers (e.g., [1, 2, 3])
         """
         return list(self._discovered_slots)
+
+    def get_slot_types(self) -> dict[int, str]:
+        """Get the source type for each discovered slot.
+
+        Returns:
+            Dict mapping slot number to type ("browser" or "text")
+        """
+        return {
+            slot: "browser" if self._slot_is_browser_source.get(slot, False) else "text"
+            for slot in self._discovered_slots
+        }

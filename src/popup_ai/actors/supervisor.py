@@ -563,7 +563,7 @@ class PipelineSupervisor:
                 timestamp_ms=int(time.time() * 1000),
             )
             self._queues["annotation"].put_nowait(annotation)
-            self._logger.debug(f"Injected test annotation: {term}")
+            self._logger.info(f"Injected test annotation into queue: {term}")
             return True
         except Exception as e:
             self._logger.error(f"Failed to inject annotation: {e}")
@@ -592,3 +592,18 @@ class PipelineSupervisor:
             return ray.get(self._actors["overlay"].get_discovered_slots.remote())
         except Exception:
             return []
+
+    def overlay_get_slot_types(self) -> dict[int, str]:
+        """Get the source type for each discovered slot.
+
+        Returns:
+            Dict mapping slot number to type ("browser" or "text")
+        """
+        if "overlay" not in self._actors:
+            return {}
+
+        try:
+            import ray
+            return ray.get(self._actors["overlay"].get_slot_types.remote())
+        except Exception:
+            return {}

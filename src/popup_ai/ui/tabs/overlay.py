@@ -33,6 +33,7 @@ class OverlayTab:
         self._slot_cards: dict[int, ui.card] = {}
         # Track discovered slots for dynamic UI
         self._discovered_slots: list[int] = []
+        self._slot_types: dict[int, str] = {}  # slot -> "browser" or "text"
         # Manual control inputs
         self._text_slot_select: ui.select | None = None
         self._term_input: ui.input | None = None
@@ -53,6 +54,23 @@ class OverlayTab:
             # Status card
             self._status_card = StatusCard("overlay", stage.status if stage else None)
             self._status_card.build()
+
+            # Browser Overlay URL section
+            with ui.card().classes("w-full"):
+                ui.label("Browser Overlay").classes("text-h6")
+                ui.label(
+                    "Add a Browser Source in OBS named 'popup-ai-slot-1' and point it to this URL:"
+                ).classes("text-caption text-grey mb-2")
+
+                overlay_url = f"http://localhost:{self._settings.pipeline.ui_port}/static/overlay.html"
+                with ui.row().classes("items-center gap-2"):
+                    ui.input(value=overlay_url).classes("flex-1").props("dense readonly")
+                    ui.button(icon="content_copy", on_click=lambda: ui.clipboard.write(overlay_url)).props("flat dense")
+
+                with ui.row().classes("gap-4 mt-2 text-caption"):
+                    ui.label("Chatlog mode:").classes("text-grey")
+                    chatlog_url = f"{overlay_url}?mode=chatlog"
+                    ui.link(chatlog_url, chatlog_url, new_tab=True).classes("text-primary")
 
             # Settings (collapsed) - placed high for easy access
             with ui.expansion("Overlay Settings", icon="settings").classes("w-full"):
@@ -201,12 +219,13 @@ class OverlayTab:
 
         return container
 
-    def _rebuild_slot_ui(self, slots: list[int]) -> None:
+    def _rebuild_slot_ui(self, slots: list[int], slot_types: dict[int, str] | None = None) -> None:
         """Rebuild the dynamic slot-based UI elements."""
-        if slots == self._discovered_slots:
+        if slots == self._discovered_slots and slot_types == self._slot_types:
             return  # No change
 
         self._discovered_slots = slots
+        self._slot_types = slot_types or {}
 
         # Update slot select dropdown
         if self._text_slot_select:
@@ -245,11 +264,18 @@ class OverlayTab:
             with self._active_slots_container:
                 if slots:
                     for slot in slots:
+                        slot_type = self._slot_types.get(slot, "text")
+                        is_browser = slot_type == "browser"
                         slot_card = ui.card().classes(
-                            "w-32 h-16 flex items-center justify-center bg-grey-2"
+                            f"w-32 h-16 flex flex-col items-center justify-center "
+                            f"{'bg-blue-1' if is_browser else 'bg-grey-2'}"
                         )
                         with slot_card:
                             ui.label(f"Slot {slot}").classes("text-caption text-grey")
+                            type_label = "browser" if is_browser else "text"
+                            ui.label(type_label).classes(
+                                f"text-xs {'text-blue' if is_browser else 'text-grey'}"
+                            )
                         self._slot_cards[slot] = slot_card
                 else:
                     ui.label("No slots discovered yet").classes("text-caption text-grey")
@@ -450,12 +476,14 @@ class OverlayTab:
             ui.notify("Rediscovering slots...", type="info")
             success = await supervisor.overlay_reconnect.remote()
             if success:
-                # Get updated slots
-                slots = supervisor.overlay_get_discovered_slots.remote()
+                # Get updated slots and types
                 import ray
-                slots = ray.get(slots)
-                self._rebuild_slot_ui(slots)
-                ui.notify(f"Found {len(slots)} slot(s)", type="positive")
+                slots = ray.get(supervisor.overlay_get_discovered_slots.remote())
+                slot_types = ray.get(supervisor.overlay_get_slot_types.remote())
+                self._rebuild_slot_ui(slots, slot_types)
+                browser_count = sum(1 for t in slot_types.values() if t == "browser")
+                text_count = len(slots) - browser_count
+                ui.notify(f"Found {len(slots)} slot(s): {browser_count} browser, {text_count} text", type="positive")
             else:
                 ui.notify("Failed to reconnect to OBS", type="warning")
 
@@ -518,6 +546,9 @@ class OverlayTab:
                                 slots = ray.get(
                                     supervisor.overlay_get_discovered_slots.remote()
                                 )
-                                self._rebuild_slot_ui(slots)
+                                slot_types = ray.get(
+                                    supervisor.overlay_get_slot_types.remote()
+                                )
+                                self._rebuild_slot_ui(slots, slot_types)
                             except Exception:
                                 pass

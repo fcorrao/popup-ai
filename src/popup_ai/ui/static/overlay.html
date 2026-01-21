@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>popup-ai Overlay</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: transparent;
+            min-height: 100vh;
+        }
+
+        /* Single mode: position at bottom */
+        body.mode-single {
+            display: flex;
+            align-items: flex-end;
+        }
+
+        /* Chatlog mode: stack from top */
+        body.mode-chatlog {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            justify-content: flex-end;
+        }
+
+        #container {
+            width: 100%;
+            max-width: 80%;
+            display: none;  /* Hidden until first annotation */
+        }
+
+        #container.has-content {
+            display: block;
+        }
+
+        .glossary-card {
+            background: rgba(0, 0, 0, 0.85);
+            border-left: 8px solid #FFFF00;
+            padding: 15px 25px;
+            border-radius: 4px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            margin-bottom: 10px;
+            transition: all 0.5s ease-in-out;
+            opacity: 0;
+            transform: translateY(20px);
+        }
+
+        .glossary-card.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .glossary-card.fade-out {
+            opacity: 0;
+            transform: translateY(-20px);
+        }
+
+        .bracket {
+            color: #666;
+            font-weight: 300;
+            font-size: 1.5em;
+        }
+
+        .term {
+            color: #FFFF00;
+            font-weight: 900;
+            font-size: 1.5em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin: 0 8px;
+        }
+
+        .definition {
+            color: #FFFFFF;
+            font-size: 1.3em;
+            font-weight: 400;
+            line-height: 1.4;
+            margin-left: 10px;
+        }
+
+        /* Status indicator */
+        #status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            opacity: 0.7;
+            transition: opacity 0.3s;
+        }
+
+        #status.connected {
+            background: rgba(0, 200, 0, 0.3);
+            color: #0f0;
+        }
+
+        #status.disconnected {
+            background: rgba(200, 0, 0, 0.3);
+            color: #f00;
+        }
+
+        #status.hidden {
+            opacity: 0;
+        }
+
+        /* Startup banner - visible until first annotation */
+        #startup-banner {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 100, 200, 0.9);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 4px;
+            font-size: 1.2em;
+            border-left: 8px solid #00BFFF;
+        }
+
+        #startup-banner.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body class="mode-single">
+    <div id="status" class="disconnected">Disconnected</div>
+    <div id="startup-banner">popup-ai overlay loaded - waiting for annotations...</div>
+    <div id="container"></div>
+
+    <script>
+        // Parse URL parameters
+        const params = new URLSearchParams(window.location.search);
+        const MODE = params.get('mode') || 'single';  // 'single' or 'chatlog'
+        const OBS_PORT = params.get('port') || '4455';  // OBS WebSocket port (default 4455)
+        const MAX_CHATLOG_ENTRIES = parseInt(params.get('max') || '10', 10);
+        const HIDE_STATUS_AFTER = 5000;  // Hide status indicator after 5s
+
+        // Default to localhost (for OBS browser source), but allow override for external testing
+        const OBS_HOST = params.get('host') || 'localhost';
+
+        // Set body class based on mode
+        document.body.className = `mode-${MODE}`;
+
+        const container = document.getElementById('container');
+        const statusEl = document.getElementById('status');
+        const startupBanner = document.getElementById('startup-banner');
+
+        let socket = null;
+        let reconnectTimeout = null;
+        let reconnectDelay = 1000;
+        let statusHideTimeout = null;
+        let currentCard = null;  // For single mode
+
+        function showStatus(connected) {
+            statusEl.className = connected ? 'connected' : 'disconnected';
+            statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+            statusEl.classList.remove('hidden');
+
+            // Hide status after delay when connected
+            if (statusHideTimeout) clearTimeout(statusHideTimeout);
+            if (connected) {
+                statusHideTimeout = setTimeout(() => {
+                    statusEl.classList.add('hidden');
+                }, HIDE_STATUS_AFTER);
+            }
+        }
+
+        function connect() {
+            const wsUrl = `ws://${OBS_HOST}:${OBS_PORT}`;
+            console.log(`Connecting to OBS WebSocket: ${wsUrl}`);
+
+            try {
+                socket = new WebSocket(wsUrl);
+            } catch (e) {
+                console.error('WebSocket creation failed:', e);
+                scheduleReconnect();
+                return;
+            }
+
+            socket.onopen = () => {
+                console.log('WebSocket connected, sending identification...');
+                // OBS WebSocket v5 identification (no password - browser source is local to OBS)
+                socket.send(JSON.stringify({
+                    op: 1,  // Identify
+                    d: { rpcVersion: 1 }
+                }));
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+
+                    // Handle different op codes
+                    switch (msg.op) {
+                        case 0:  // Hello
+                            console.log('Received Hello from OBS');
+                            break;
+
+                        case 2:  // Identified
+                            console.log('Successfully identified with OBS');
+                            showStatus(true);
+                            reconnectDelay = 1000;  // Reset reconnect delay
+                            break;
+
+                        case 5:  // Event
+                            if (msg.d && msg.d.eventType === 'CustomEvent') {
+                                const eventData = msg.d.eventData;
+                                if (eventData && (eventData.term !== undefined || eventData.definition !== undefined)) {
+                                    handleAnnotation(eventData.term || '', eventData.definition || '');
+                                }
+                            }
+                            break;
+                    }
+                } catch (e) {
+                    console.error('Error parsing message:', e);
+                }
+            };
+
+            socket.onclose = () => {
+                console.log('WebSocket closed');
+                showStatus(false);
+                scheduleReconnect();
+            };
+
+            socket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                showStatus(false);
+            };
+        }
+
+        function scheduleReconnect() {
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            console.log(`Reconnecting in ${reconnectDelay}ms...`);
+            reconnectTimeout = setTimeout(() => {
+                connect();
+            }, reconnectDelay);
+            // Exponential backoff, max 30 seconds
+            reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
+        }
+
+        function createCard(term, definition) {
+            const card = document.createElement('div');
+            card.className = 'glossary-card';
+
+            // Build content - handle empty term (direct text sends)
+            if (term) {
+                card.innerHTML = `
+                    <span class="bracket">[</span>
+                    <span class="term">${escapeHtml(term)}</span>
+                    <span class="bracket">]</span>
+                    <span class="definition">${escapeHtml(definition)}</span>
+                `;
+            } else {
+                card.innerHTML = `<span class="definition">${escapeHtml(definition)}</span>`;
+            }
+
+            return card;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function handleAnnotation(term, definition) {
+            console.log(`Annotation: [${term}] ${definition}`);
+
+            // Hide startup banner on first annotation
+            if (startupBanner && !startupBanner.classList.contains('hidden')) {
+                startupBanner.classList.add('hidden');
+            }
+
+            // Show container on first annotation
+            if (!container.classList.contains('has-content')) {
+                container.classList.add('has-content');
+            }
+
+            if (MODE === 'single') {
+                handleSingleMode(term, definition);
+            } else {
+                handleChatlogMode(term, definition);
+            }
+        }
+
+        function handleSingleMode(term, definition) {
+            const newCard = createCard(term, definition);
+
+            if (currentCard) {
+                // Fade out current card
+                currentCard.classList.add('fade-out');
+                currentCard.classList.remove('visible');
+
+                setTimeout(() => {
+                    if (currentCard && currentCard.parentNode) {
+                        currentCard.parentNode.removeChild(currentCard);
+                    }
+                    // Add new card
+                    container.appendChild(newCard);
+                    currentCard = newCard;
+                    // Trigger fade in
+                    requestAnimationFrame(() => {
+                        newCard.classList.add('visible');
+                    });
+                }, 500);
+            } else {
+                // First card
+                container.appendChild(newCard);
+                currentCard = newCard;
+                requestAnimationFrame(() => {
+                    newCard.classList.add('visible');
+                });
+            }
+        }
+
+        function handleChatlogMode(term, definition) {
+            const newCard = createCard(term, definition);
+            container.appendChild(newCard);
+
+            // Trigger fade in
+            requestAnimationFrame(() => {
+                newCard.classList.add('visible');
+            });
+
+            // Remove old entries if over limit
+            const cards = container.querySelectorAll('.glossary-card');
+            if (cards.length > MAX_CHATLOG_ENTRIES) {
+                const oldCard = cards[0];
+                oldCard.classList.add('fade-out');
+                oldCard.classList.remove('visible');
+                setTimeout(() => {
+                    if (oldCard.parentNode) {
+                        oldCard.parentNode.removeChild(oldCard);
+                    }
+                }, 500);
+            }
+        }
+
+        // Start connection
+        connect();
+    </script>
+</body>
+</html>

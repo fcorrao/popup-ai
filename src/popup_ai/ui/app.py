@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 import ray
@@ -296,6 +297,11 @@ def run_app(settings: Settings) -> None:
     @ui.page("/")
     def index() -> None:
         pipeline_ui.build_ui()
+
+    # Serve static files (for browser overlay HTML)
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists():
+        app.add_static_files("/static", static_dir)
 
     # Configure NiceGUI
     ui.run(
