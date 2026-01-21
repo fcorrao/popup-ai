@@ -98,31 +98,20 @@ PROVIDER_MODELS: dict[str, list[str]] = {
 
 
 class OverlayConfig(BaseSettings):
-    """Configuration for OverlayActor."""
+    """Configuration for OverlayActor (browser source only)."""
 
     model_config = SettingsConfigDict(env_prefix="POPUP_OVERLAY_")
 
     obs_host: str = Field(default="100.126.180.24", description="OBS WebSocket host")
     obs_port: int = Field(default=4455, description="OBS WebSocket port")
     obs_password: str | None = Field(default=None, description="OBS WebSocket password")
-    scene_name: str = Field(default="popup-ai-overlay", description="OBS scene name")
-    hold_duration_ms: int = Field(default=5000, description="Annotation display duration")
 
-    # Scroll filter settings for horizontal scrolling text
-    scroll_filter_name: str = Field(
-        default="Scroll", description="Name of the scroll filter on each slot source"
+    # Browser panel settings
+    chatlog_mode: bool = Field(
+        default=True, description="Chatlog mode (stack entries) vs single mode (one at a time)"
     )
-    scroll_viewport_width_px: int = Field(
-        default=400, description="Fallback viewport width if not discoverable from OBS"
-    )
-    scroll_speed_px_s: float = Field(
-        default=100.0, description="Comfortable scroll speed (pixels/second) - duration scales with text length"
-    )
-    min_display_ms: int = Field(
-        default=3000, description="Minimum display duration in ms (floor for short text)"
-    )
-    chars_per_second: float = Field(
-        default=15.0, description="Estimated readable characters per second for duration calculation"
+    max_entries_per_panel: int = Field(
+        default=6, description="Max entries per panel before overflow to panel 2 (chatlog mode)"
     )
 
 

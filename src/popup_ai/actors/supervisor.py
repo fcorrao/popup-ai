@@ -439,12 +439,12 @@ class PipelineSupervisor:
 
     # ========== Overlay Proxy Methods ==========
 
-    async def overlay_send_text(self, slot: int, text: str) -> bool:
-        """Send text directly to an OBS overlay slot.
+    async def overlay_send_text(self, text: str, panel: int = 1) -> bool:
+        """Send text directly to a browser panel.
 
         Args:
-            slot: Slot number (1-4)
             text: Text to display
+            panel: Target panel (1 or 2)
 
         Returns:
             True if successful, False otherwise
@@ -454,17 +454,13 @@ class PipelineSupervisor:
             return False
 
         try:
-            await self._actors["overlay"].send_text.remote(slot, text)
-            return True
+            return await self._actors["overlay"].send_text.remote(text, panel)
         except Exception as e:
             self._logger.error(f"Failed to send text to overlay: {e}")
             return False
 
-    async def overlay_clear_slot(self, slot: int) -> bool:
-        """Clear a specific overlay slot.
-
-        Args:
-            slot: Slot number (1-4)
+    async def overlay_clear_panels(self) -> bool:
+        """Reset panel counts (browser sources handle their own clearing).
 
         Returns:
             True if successful, False otherwise
@@ -474,27 +470,10 @@ class PipelineSupervisor:
             return False
 
         try:
-            await self._actors["overlay"].clear_slot.remote(slot)
+            await self._actors["overlay"].clear_panels.remote()
             return True
         except Exception as e:
-            self._logger.error(f"Failed to clear slot: {e}")
-            return False
-
-    async def overlay_clear_all(self) -> bool:
-        """Clear all overlay slots.
-
-        Returns:
-            True if successful, False otherwise
-        """
-        if "overlay" not in self._actors:
-            self._logger.warning("Overlay actor not running")
-            return False
-
-        try:
-            await self._actors["overlay"].clear_all.remote()
-            return True
-        except Exception as e:
-            self._logger.error(f"Failed to clear all slots: {e}")
+            self._logger.error(f"Failed to clear panels: {e}")
             return False
 
     async def overlay_reconnect(self) -> bool:
@@ -528,18 +507,14 @@ class PipelineSupervisor:
         except Exception:
             return False
 
-    async def overlay_inject_annotation(
-        self, term: str, explanation: str, duration_ms: int | None = None
-    ) -> bool:
+    async def overlay_inject_annotation(self, term: str, explanation: str) -> bool:
         """Inject a test annotation into the overlay queue.
 
-        This sends an Annotation through the normal processing flow, so it will
-        be displayed and then auto-cleared after the display duration.
+        This sends an Annotation through the normal processing flow.
 
         Args:
             term: The term to display
             explanation: The explanation text
-            duration_ms: Display duration in ms (uses default if not specified)
 
         Returns:
             True if annotation was queued, False otherwise
@@ -558,8 +533,8 @@ class PipelineSupervisor:
             annotation = Annotation(
                 term=term,
                 explanation=explanation,
-                display_duration_ms=duration_ms or self.settings.overlay.hold_duration_ms,
-                slot=1,  # Will be reassigned by overlay actor
+                display_duration_ms=5000,  # Not used by browser overlay
+                slot=1,  # Not used by browser overlay
                 timestamp_ms=int(time.time() * 1000),
             )
             self._queues["annotation"].put_nowait(annotation)
@@ -578,32 +553,17 @@ class PipelineSupervisor:
         from popup_ai.actors.annotator import get_annotation_schema
         return get_annotation_schema()
 
-    def overlay_get_discovered_slots(self) -> list[int]:
-        """Get the list of discovered overlay slots.
+    def overlay_get_panel_status(self) -> dict:
+        """Get current panel status.
 
         Returns:
-            List of slot numbers, or empty list if overlay not running
-        """
-        if "overlay" not in self._actors:
-            return []
-
-        try:
-            import ray
-            return ray.get(self._actors["overlay"].get_discovered_slots.remote())
-        except Exception:
-            return []
-
-    def overlay_get_slot_types(self) -> dict[int, str]:
-        """Get the source type for each discovered slot.
-
-        Returns:
-            Dict mapping slot number to type ("browser" or "text")
+            Dict with panel counts and configuration
         """
         if "overlay" not in self._actors:
             return {}
 
         try:
             import ray
-            return ray.get(self._actors["overlay"].get_slot_types.remote())
+            return ray.get(self._actors["overlay"].get_panel_status.remote())
         except Exception:
             return {}
