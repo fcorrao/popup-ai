@@ -173,8 +173,8 @@ class TranscriberTab:
 
         try:
             # Get file info
-            filename = e.name
-            file_bytes = e.content.read()
+            filename = e.file.name
+            file_bytes = await e.file.read()
             format_ext = filename.rsplit(".", 1)[-1].lower()
 
             # Convert to PCM

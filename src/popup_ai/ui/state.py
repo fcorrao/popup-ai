@@ -40,15 +40,19 @@ class StageState:
 class UIState:
     """Central state management for the admin UI."""
 
-    STAGES = ["audio_ingest", "transcriber", "annotator", "overlay", "diagnostics"]
+    STAGES = ["media_ingest", "transcriber", "ocr", "annotator", "overlay", "diagnostics"]
 
     # Maps event_type to (stage, buffer_type) for routing
     EVENT_ROUTING: dict[str, tuple[str, str]] = {
-        # Audio ingest outputs
-        "chunk_produced": ("audio_ingest", "output"),
+        # Media ingest outputs (audio and video)
+        "chunk_produced": ("media_ingest", "output"),
+        "frame_produced": ("media_ingest", "output"),
         # Transcriber inputs/outputs
         "audio_received": ("transcriber", "input"),
         "transcript": ("transcriber", "output"),
+        # OCR inputs/outputs
+        "frame_processed": ("ocr", "input"),
+        "transcript_emitted": ("ocr", "output"),
         # Annotator inputs/outputs
         "transcript_received": ("annotator", "input"),
         "annotation": ("annotator", "output"),

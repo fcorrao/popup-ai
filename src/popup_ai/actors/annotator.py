@@ -6,6 +6,7 @@ import hashlib
 import logging
 import sqlite3
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,7 @@ class AnnotatorActor:
         self._running = False
         self._process_task: asyncio.Task | None = None
         self._annotations_sent = 0
+        self._annotations_deduplicated = 0
         self._cache_hits = 0
         self._llm_calls = 0
         self._db_conn: sqlite3.Connection | None = None
@@ -94,10 +96,19 @@ class AnnotatorActor:
         self._slot_counter = 0
         self._logger = logging.getLogger("popup_ai.actors.annotator")
 
+        # Track recently emitted annotations to avoid duplicates
+        # Format: (timestamp_ms, term_lower)
+        self._recent_annotations: deque[tuple[int, str]] = deque()
+        self._annotation_dedupe_window_ms = 60_000  # 60 seconds
+
+        # Configure logfire in __init__ to avoid blocking async event loop
+        ensure_logfire_configured()
+
     def get_status(self) -> ActorStatus:
         """Get current actor status."""
         stats = {
             "annotations_sent": self._annotations_sent,
+            "annotations_deduplicated": self._annotations_deduplicated,
             "cache_hits": self._cache_hits,
             "llm_calls": self._llm_calls,
         }
@@ -115,7 +126,6 @@ class AnnotatorActor:
         if self._state == "running":
             return
 
-        ensure_logfire_configured()
         with logfire.span("annotator.start"):
             self._logger.info("Starting annotator actor")
             import os
@@ -196,11 +206,17 @@ class AnnotatorActor:
         if self.config.cache_enabled:
             self._db_conn.execute("""
                 CREATE TABLE IF NOT EXISTS annotations (
-                    text_hash TEXT PRIMARY KEY,
+                    text_hash TEXT NOT NULL,
                     term TEXT NOT NULL,
                     explanation TEXT NOT NULL,
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (text_hash, term)
                 )
+            """)
+            # Index for term lookups (to check if term was recently annotated)
+            self._db_conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_annotations_term
+                ON annotations(term COLLATE NOCASE)
             """)
 
         # Prompts table (always created for prompt persistence)
@@ -373,13 +389,13 @@ class AnnotatorActor:
             self._logger.info("Warming up LLM connection...")
             start_time = time.time()
 
-            # Use a simple warmup prompt
-            await self._agent.run("Say 'ready' in one word.")
+            # Use a warmup prompt that produces valid AnnotationResponse
+            await self._agent.run("The word is: API. Explain it briefly.")
             latency_ms = (time.time() - start_time) * 1000
             self._logger.info(f"LLM warmup complete in {latency_ms:.0f}ms")
         except Exception as e:
-            self._logger.exception(f"LLM warmup failed: {e}")
-            # Don't raise - allow annotator to start anyway, maybe network is temporarily down
+            self._logger.warning(f"LLM warmup failed (non-fatal): {e}")
+            # Don't raise - allow annotator to start anyway
 
     async def _process_loop(self) -> None:
         """Main processing loop."""
@@ -460,6 +476,22 @@ class AnnotatorActor:
         except Exception as e:
             self._logger.warning(f"Failed to cache annotation: {e}")
 
+    def _get_cached_term(self, term: str) -> str | None:
+        """Look up a term in the cache (case-insensitive).
+
+        Returns the explanation if found, None otherwise.
+        """
+        if not self._db_conn:
+            return None
+
+        cursor = self._db_conn.execute(
+            "SELECT explanation FROM annotations WHERE term = ? COLLATE NOCASE "
+            "ORDER BY created_at DESC LIMIT 1",
+            (term,),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
     async def _call_llm(self, text: str) -> list[tuple[str, str]]:
         """Call LLM to extract annotations using pydantic-ai agent."""
         if not self._agent:
@@ -495,10 +527,36 @@ class AnnotatorActor:
 
         return []  # Unreachable, but satisfies type checker
 
+    def _is_recently_emitted(self, term: str) -> bool:
+        """Check if this term was recently emitted."""
+        now_ms = int(time.time() * 1000)
+        window_start = now_ms - self._annotation_dedupe_window_ms
+
+        # Clean up old entries
+        while self._recent_annotations and self._recent_annotations[0][0] < window_start:
+            self._recent_annotations.popleft()
+
+        # Check if term was recently emitted (case-insensitive)
+        term_lower = term.lower()
+        for _, recent_term in self._recent_annotations:
+            if recent_term == term_lower:
+                return True
+
+        return False
+
     async def _emit_annotation(
         self, term: str, explanation: str, cache_hit: bool = False
     ) -> None:
         """Emit an annotation to the output queue."""
+        # Check for recently emitted duplicates (term-level dedupe)
+        if self._is_recently_emitted(term):
+            self._logger.warning(f"Skipping duplicate term (already shown in last 60s): {term}")
+            self._annotations_deduplicated += 1
+            return
+
+        # Track this emission
+        self._recent_annotations.append((int(time.time() * 1000), term.lower()))
+
         self._slot_counter = (self._slot_counter % 4) + 1
 
         annotation = Annotation(

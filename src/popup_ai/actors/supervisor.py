@@ -41,6 +41,7 @@ class PipelineSupervisor:
         """Initialize Ray queues for actor communication."""
         self._queues = {
             "audio": Queue(maxsize=100),
+            "video": Queue(maxsize=50),  # Video frames are larger, smaller queue
             "transcript": Queue(maxsize=100),
             "annotation": Queue(maxsize=100),
             "ui": Queue(maxsize=1000),
@@ -59,15 +60,31 @@ class PipelineSupervisor:
         if self._running:
             return
 
-        self._logger.info("Starting pipeline supervisor")
+        self._logger.warning("Starting pipeline supervisor")
+        self._logger.warning(
+            f"Pipeline settings: audio={self.settings.pipeline.audio_enabled}, "
+            f"video={self.settings.pipeline.video_enabled}, "
+            f"ocr={self.settings.pipeline.ocr_enabled}, "
+            f"transcriber={self.settings.pipeline.transcriber_enabled}, "
+            f"annotator={self.settings.pipeline.annotator_enabled}, "
+            f"overlay={self.settings.pipeline.overlay_enabled}"
+        )
+        self._logger.warning(
+            f"Video config: enabled={self.settings.video.enabled}, "
+            f"fps={self.settings.video.fps}, "
+            f"scale_width={self.settings.video.scale_width}"
+        )
         self._running = True
 
         # Spawn actors based on configuration
         if self.settings.pipeline.audio_enabled:
-            await self._spawn_actor("audio_ingest")
+            await self._spawn_actor("media_ingest")
 
         if self.settings.pipeline.transcriber_enabled:
             await self._spawn_actor("transcriber")
+
+        if self.settings.pipeline.ocr_enabled:
+            await self._spawn_actor("ocr")
 
         if self.settings.pipeline.annotator_enabled:
             await self._spawn_actor("annotator")
@@ -111,12 +128,27 @@ class PipelineSupervisor:
         self._logger.info(f"Spawning {actor_type} actor")
 
         try:
-            if actor_type == "audio_ingest":
-                from popup_ai.actors.audio_ingest import AudioIngestActor
+            if actor_type == "media_ingest":
+                from popup_ai.actors.media_ingest import MediaIngestActor
 
-                actor = AudioIngestActor.remote(
-                    config=self.settings.audio,
-                    output_queue=self._queues["audio"],
+                # Determine if video is enabled
+                video_config = None
+                video_queue = None
+                if self.settings.pipeline.video_enabled and self.settings.video.enabled:
+                    video_config = self.settings.video
+                    video_queue = self._queues["video"]
+                    self._logger.warning(f"Passing video_queue to MediaIngestActor: {video_queue}")
+                else:
+                    self._logger.warning(
+                        f"NOT passing video_queue: pipeline.video_enabled={self.settings.pipeline.video_enabled}, "
+                        f"video.enabled={self.settings.video.enabled}"
+                    )
+
+                actor = MediaIngestActor.remote(
+                    audio_config=self.settings.audio,
+                    audio_queue=self._queues["audio"],
+                    video_config=video_config,
+                    video_queue=video_queue,
                     ui_queue=self._queues["ui"],
                 )
             elif actor_type == "transcriber":
@@ -135,6 +167,15 @@ class PipelineSupervisor:
                     config=self.settings.annotator,
                     input_queue=self._queues["transcript"],
                     output_queue=self._queues["annotation"],
+                    ui_queue=self._queues["ui"],
+                )
+            elif actor_type == "ocr":
+                from popup_ai.actors.ocr import OcrActor
+
+                actor = OcrActor.remote(
+                    config=self.settings.ocr,
+                    input_queue=self._queues["video"],
+                    output_queue=self._queues["transcript"],  # OCR outputs to transcript queue
                     ui_queue=self._queues["ui"],
                 )
             elif actor_type == "overlay":

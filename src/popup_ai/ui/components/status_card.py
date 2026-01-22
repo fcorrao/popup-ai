@@ -84,8 +84,16 @@ class StatusCard:
         # Update stats
         self._render_stats()
 
+    # Special display names for actors
+    DISPLAY_NAMES = {
+        "ocr": "OCR",
+        "media_ingest": "Media Ingest",
+    }
+
     def _format_name(self) -> str:
         """Format the actor name for display."""
+        if self.name in self.DISPLAY_NAMES:
+            return self.DISPLAY_NAMES[self.name]
         return self.name.replace("_", " ").title()
 
     def _get_icon(self) -> tuple[str, str]:

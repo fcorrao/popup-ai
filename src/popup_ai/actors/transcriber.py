@@ -55,6 +55,9 @@ class TranscriberActor:
         self._last_ui_event_time = 0.0
         self._ui_event_interval = 1.0  # Only emit UI events every 1 second
 
+        # Configure logfire in __init__ to avoid blocking async event loop
+        ensure_logfire_configured()
+
     def get_status(self) -> ActorStatus:
         """Get current actor status."""
         stats = {
@@ -79,7 +82,6 @@ class TranscriberActor:
         if self._state == "running":
             return
 
-        ensure_logfire_configured()
         with logfire.span("transcriber.start"):
             self._logger.info("Starting transcriber actor")
             self._state = "starting"

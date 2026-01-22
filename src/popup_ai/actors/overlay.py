@@ -80,6 +80,9 @@ class OverlayActor:
         self._next_retry_time: float | None = None
         self._reconnecting = False
 
+        # Configure logfire in __init__ to avoid blocking async event loop
+        ensure_logfire_configured()
+
     def get_status(self) -> ActorStatus:
         """Get current actor status."""
         stats = {
@@ -107,9 +110,10 @@ class OverlayActor:
         if self._state == "running":
             return
 
-        ensure_logfire_configured()
         with logfire.span("overlay.start"):
-            self._logger.info("Starting overlay actor")
+            self._logger.warning(
+                f"Starting overlay actor, connecting to OBS at {self.config.obs_host}:{self.config.obs_port}"
+            )
             self._state = "starting"
             self._error = None
 
@@ -205,14 +209,19 @@ class OverlayActor:
         try:
             from obsws_python import ReqClient
 
-            self._obs_client = ReqClient(
-                host=self.config.obs_host,
-                port=self.config.obs_port,
-                password=self.config.obs_password or "",
-            )
+            # Run blocking connection in executor to avoid blocking event loop
+            def _create_client():
+                return ReqClient(
+                    host=self.config.obs_host,
+                    port=self.config.obs_port,
+                    password=self.config.obs_password or "",
+                )
+
+            loop = asyncio.get_event_loop()
+            self._obs_client = await loop.run_in_executor(None, _create_client)
             self._obs_connected = True
             self._reset_retry_state()
-            self._logger.info(f"Connected to OBS at {self.config.obs_host}:{self.config.obs_port}")
+            self._logger.warning(f"Connected to OBS at {self.config.obs_host}:{self.config.obs_port}")
             self._publish_ui_event("obs_connected", {
                 "host": self.config.obs_host,
                 "port": self.config.obs_port,
@@ -265,7 +274,7 @@ class OverlayActor:
                     continue
 
                 if isinstance(annotation, Annotation):
-                    self._logger.info(f"Received annotation from queue: {annotation.term}")
+                    self._logger.warning(f"Received annotation from queue: {annotation.term}")
                     # Publish annotation_received event for UI
                     self._publish_ui_event("annotation_received", {
                         "term": annotation.term,
@@ -318,8 +327,8 @@ class OverlayActor:
             else:
                 self._panel_2_count += 1
 
-        # Broadcast to browser sources
-        self._broadcast_annotation(
+        # Broadcast to browser sources (async to avoid blocking on network)
+        broadcast_ok = await self._broadcast_annotation(
             term=annotation.term,
             definition=annotation.explanation,
             panel=panel,
@@ -330,6 +339,7 @@ class OverlayActor:
             "panel": panel,
             "term": annotation.term,
             "explanation": annotation.explanation,
+            "broadcast_ok": broadcast_ok,
         })
 
     def _publish_ui_event(self, event_type: str, data: dict) -> None:
@@ -347,20 +357,23 @@ class OverlayActor:
         except Exception:
             pass
 
-    def _broadcast_annotation(self, term: str, definition: str, panel: int = 1) -> None:
+    async def _broadcast_annotation(self, term: str, definition: str, panel: int = 1) -> bool:
         """Broadcast annotation to browser sources via OBS BroadcastCustomEvent.
 
         Args:
             term: The term being defined
             definition: The definition/explanation
             panel: Target panel number (1 or 2)
+
+        Returns:
+            True if broadcast succeeded, False otherwise
         """
         if not self._obs_client or not self._obs_connected:
             self._logger.warning(
                 f"Cannot broadcast: obs_client={self._obs_client is not None}, "
                 f"connected={self._obs_connected}"
             )
-            return
+            return False
 
         def _broadcast():
             self._obs_client.broadcast_custom_event({
@@ -373,13 +386,17 @@ class OverlayActor:
             })
 
         try:
-            _broadcast()
-            self._logger.info(
+            # Run blocking OBS call in executor to avoid blocking event loop
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _broadcast)
+            self._logger.warning(
                 f"Broadcast to panel {panel}: [{term}] {definition[:50]}..."
             )
+            return True
         except Exception as e:
             self._logger.error(f"Failed to broadcast custom event: {e}")
             self._handle_connection_error("broadcast", e)
+            return False
 
     # ========== Public Methods for Direct Control ==========
 
@@ -397,14 +414,15 @@ class OverlayActor:
             self._logger.warning(f"Invalid panel {panel}, must be 1 or 2")
             return False
 
-        self._broadcast_annotation("", text, panel=panel)
+        broadcast_ok = await self._broadcast_annotation("", text, panel=panel)
         self._publish_ui_event("display", {
             "panel": panel,
             "term": text[:20] if len(text) > 20 else text,
             "explanation": "",
             "direct": True,
+            "broadcast_ok": broadcast_ok,
         })
-        return True
+        return broadcast_ok
 
     async def clear_panels(self) -> None:
         """Reset panel counts (browser sources handle their own clearing)."""

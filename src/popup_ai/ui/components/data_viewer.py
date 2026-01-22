@@ -148,10 +148,11 @@ def format_overlay_event(event: UIEvent) -> str:
         term = event.data.get("term", "")
         return f"[{timestamp}] Input: {term}"
     elif event.event_type == "display":
-        slot = event.data.get("slot", "?")
+        panel = event.data.get("panel", "?")
         term = event.data.get("term", "")
-        return f"[{timestamp}] Slot {slot}: {term}"
-    elif event.event_type == "clear":
-        slot = event.data.get("slot", "?")
-        return f"[{timestamp}] Cleared slot {slot}"
+        broadcast_ok = event.data.get("broadcast_ok", True)
+        status = "" if broadcast_ok else " (NOT SENT - OBS disconnected)"
+        return f"[{timestamp}] Panel {panel}: {term}{status}"
+    elif event.event_type == "panels_cleared":
+        return f"[{timestamp}] Panels cleared"
     return f"[{timestamp}] {event.event_type}"

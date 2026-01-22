@@ -23,6 +23,9 @@ dependencies = [
     "silero-vad>=5.1",
     "logfire>=4.19.0",
     "psutil>=6.0",
+    "rapidocr-onnxruntime>=1.4.0",  # OCR engine for video text extraction (default)
+    "pytesseract>=0.3.10",  # Alternative OCR engine (requires tesseract binary)
+    "pillow>=10.0",  # Image processing for OCR
 ]
 
 [project.optional-dependencies]

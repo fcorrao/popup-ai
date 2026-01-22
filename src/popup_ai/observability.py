@@ -60,7 +60,7 @@ def ensure_logfire_configured() -> None:
     Safe to call multiple times - will only configure once per process.
     Reads config from environment variables set by the main process.
 
-    Call this in Ray actor start() methods to enable observability.
+    Call this in Ray actor __init__() methods to enable observability.
     """
     global _configured
 

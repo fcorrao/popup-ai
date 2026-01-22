@@ -30,15 +30,32 @@ class AudioChunk(BaseModel):
 
 
 class Transcript(BaseModel):
-    """Transcription result from STT processing.
+    """Transcription result from STT or OCR processing.
 
     Flows: TranscriberActor → AnnotatorActor
+           OcrActor → AnnotatorActor
     """
 
     text: str
     segments: list[TranscriptSegment] = Field(default_factory=list)
     is_partial: bool = False
     timestamp_ms: int = 0
+    source: str = "audio"  # "audio" or "ocr"
+
+
+class VideoFrame(BaseModel):
+    """Video frame for OCR processing.
+
+    Flows: MediaIngestActor → OcrActor
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    data: bytes
+    width: int
+    height: int
+    pixel_format: str  # "gray" or "rgb24"
+    timestamp_ms: int
 
 
 class Annotation(BaseModel):

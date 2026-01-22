@@ -56,6 +56,20 @@ class PipelineBar:
                     self.settings.pipeline, "annotator_enabled", e.value
                 ),
             )
+            self._checkboxes["video"] = ui.checkbox(
+                "Video",
+                value=self.settings.pipeline.video_enabled,
+                on_change=lambda e: setattr(
+                    self.settings.pipeline, "video_enabled", e.value
+                ),
+            )
+            self._checkboxes["ocr"] = ui.checkbox(
+                "OCR",
+                value=self.settings.pipeline.ocr_enabled,
+                on_change=lambda e: setattr(
+                    self.settings.pipeline, "ocr_enabled", e.value
+                ),
+            )
             self._checkboxes["overlay"] = ui.checkbox(
                 "Overlay",
                 value=self.settings.pipeline.overlay_enabled,

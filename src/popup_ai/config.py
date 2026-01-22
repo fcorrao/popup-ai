@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AudioIngestConfig(BaseSettings):
-    """Configuration for AudioIngestActor."""
+    """Configuration for MediaIngestActor (audio settings)."""
 
     model_config = SettingsConfigDict(env_prefix="POPUP_AUDIO_")
 
@@ -21,6 +21,30 @@ class AudioIngestConfig(BaseSettings):
     channels: int = Field(default=1, description="Number of audio channels")
     chunk_duration_ms: int = Field(default=200, description="Audio chunk duration in ms")
     ffmpeg_threads: int = Field(default=4, description="FFmpeg thread count (limits CPU usage)")
+
+
+class VideoIngestConfig(BaseSettings):
+    """Configuration for video frame extraction."""
+
+    model_config = SettingsConfigDict(env_prefix="POPUP_VIDEO_")
+
+    enabled: bool = Field(default=True, description="Enable video frame extraction")
+    fps: float = Field(default=1.0, description="Target frames per second")
+    scale_width: int = Field(default=1280, description="Frame width (height auto)")
+    pixel_format: str = Field(default="rgb24", description="Pixel format: rgb24 or gray")
+
+
+class OcrConfig(BaseSettings):
+    """Configuration for OcrActor."""
+
+    model_config = SettingsConfigDict(env_prefix="POPUP_OCR_")
+
+    enabled: bool = Field(default=True, description="Enable OCR processing")
+    engine: str = Field(default="rapidocr", description="OCR engine: rapidocr, tesseract")
+    languages: list[str] = Field(default=["eng"], description="OCR languages")
+    min_confidence: float = Field(default=0.4, description="Min OCR confidence threshold")
+    min_chars: int = Field(default=3, description="Min text length to emit")
+    dedupe_window_s: int = Field(default=60, description="Dedupe window in seconds")
 
 
 class TranscriberConfig(BaseSettings):
@@ -54,8 +78,8 @@ class AnnotatorConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="POPUP_ANNOTATOR_")
 
-    provider: str = Field(default="openai_compatible", description="LLM provider")
-    model: str = Field(default="nvidia/nemotron-3-nano", description="LLM model")
+    provider: str = Field(default="cerebras", description="LLM provider")
+    model: str = Field(default="gpt-oss-120b", description="LLM model")
     base_url: str | None = Field(default="http://192.168.1.64:1234/v1", description="Custom API URL for local models (e.g., LM Studio)")
     api_key_env_var: str | None = Field(default=None, description="Env var for API key")
     max_tokens: int = Field(default=500, description="Max response tokens")
@@ -150,6 +174,8 @@ class PipelineConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="POPUP_")
 
     audio_enabled: bool = Field(default=True, description="Enable audio ingest actor")
+    video_enabled: bool = Field(default=True, description="Enable video frame extraction")
+    ocr_enabled: bool = Field(default=True, description="Enable OCR actor")
     transcriber_enabled: bool = Field(default=True, description="Enable transcriber actor")
     annotator_enabled: bool = Field(default=True, description="Enable annotator actor")
     overlay_enabled: bool = Field(default=True, description="Enable overlay actor")
@@ -172,9 +198,11 @@ class Settings(BaseSettings):
 
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     audio: AudioIngestConfig = Field(default_factory=AudioIngestConfig)
+    video: VideoIngestConfig = Field(default_factory=VideoIngestConfig)
     transcriber: TranscriberConfig = Field(default_factory=TranscriberConfig)
     annotator: AnnotatorConfig = Field(default_factory=AnnotatorConfig)
     overlay: OverlayConfig = Field(default_factory=OverlayConfig)
+    ocr: OcrConfig = Field(default_factory=OcrConfig)
     diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
     logfire: LogfireConfig = Field(default_factory=LogfireConfig)
 

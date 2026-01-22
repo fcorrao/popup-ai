@@ -16,6 +16,7 @@ from popup_ai.ui.tabs import (
     AnnotatorTab,
     AudioIngestTab,
     DiagnosticsTab,
+    OcrTab,
     OverlayTab,
     OverviewTab,
     TranscriberTab,
@@ -93,8 +94,9 @@ class PipelineUI:
             # Tab navigation
             with ui.tabs().classes("w-full") as tab_nav:
                 ui.tab("overview", label="Overview", icon="dashboard")
-                ui.tab("audio_ingest", label="Audio Ingest", icon="mic")
+                ui.tab("audio_ingest", label="Media Ingest", icon="videocam")
                 ui.tab("transcriber", label="Transcriber", icon="record_voice_over")
+                ui.tab("ocr", label="OCR", icon="document_scanner")
                 ui.tab("annotator", label="Annotator", icon="auto_awesome")
                 ui.tab("overlay", label="Overlay", icon="tv")
                 ui.tab("diagnostics", label="Diagnostics", icon="monitoring")
@@ -120,6 +122,14 @@ class PipelineUI:
                         supervisor_getter=lambda: self.supervisor,
                     )
                     tabs["transcriber"].build()
+
+                with ui.tab_panel("ocr"):
+                    tabs["ocr"] = OcrTab(
+                        state,
+                        self.settings,
+                        supervisor_getter=lambda: self.supervisor,
+                    )
+                    tabs["ocr"].build()
 
                 with ui.tab_panel("annotator"):
                     tabs["annotator"] = AnnotatorTab(
@@ -169,7 +179,10 @@ class PipelineUI:
                 if "overview" in tabs:
                     tabs["overview"].update(all_statuses)
                 # Update individual tabs
-                for tab_name in ["audio_ingest", "transcriber", "annotator", "overlay", "diagnostics"]:
+                tab_names = [
+                    "audio_ingest", "transcriber", "ocr", "annotator", "overlay", "diagnostics"
+                ]
+                for tab_name in tab_names:
                     if tab_name in tabs and hasattr(tabs[tab_name], "update"):
                         tabs[tab_name].update()
             except Exception as e:
@@ -189,8 +202,11 @@ class PipelineUI:
                                 # Route to appropriate tab
                                 event_to_tab = {
                                     "chunk_produced": "audio_ingest",
+                                    "frame_produced": "audio_ingest",
                                     "audio_received": "transcriber",
                                     "transcript": "transcriber",
+                                    "frame_processed": "ocr",
+                                    "transcript_emitted": "ocr",
                                     "transcript_received": "annotator",
                                     "annotation": "annotator",
                                     "annotation_received": "overlay",
@@ -265,10 +281,22 @@ def run_app(settings: Settings) -> None:
 
     # Forward important env vars to Ray workers
     import os
+    import warnings
     env_vars = {}
     for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CEREBRAS_API_KEY", "LOCAL_LLM_API_KEY"]:
         if key in os.environ:
             env_vars[key] = os.environ[key]
+
+    # Suppress Ray's "blocking ray.get inside async actor" warning - our queue.put_nowait
+    # calls are intentionally fire-and-forget and the brief blocking is acceptable
+    warnings.filterwarnings("ignore", message=".*blocking ray.get inside async actor.*")
+
+    # Also filter at logging level in case it's a log message
+    class BlockingRayGetFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return "blocking ray.get inside async actor" not in record.getMessage()
+
+    logging.getLogger("ray").addFilter(BlockingRayGetFilter())
 
     # Initialize Ray with dashboard and log_to_driver for visibility
     context = ray.init(
@@ -280,10 +308,14 @@ def run_app(settings: Settings) -> None:
         runtime_env={"env_vars": env_vars} if env_vars else None,
     )
 
-    # Get dashboard URL
+    # Get dashboard URL and rewrite to Tailscale IP for remote access
     dashboard_url = context.dashboard_url if hasattr(context, "dashboard_url") else None
-    if dashboard_url and not dashboard_url.startswith("http"):
-        dashboard_url = f"http://{dashboard_url}"
+    if dashboard_url:
+        if not dashboard_url.startswith("http"):
+            dashboard_url = f"http://{dashboard_url}"
+        # Replace localhost/127.0.0.1 with Tailscale IP for remote access
+        dashboard_url = dashboard_url.replace("127.0.0.1", "100.77.96.79")
+        dashboard_url = dashboard_url.replace("localhost", "100.77.96.79")
 
     # Create UI instance (supervisor is shared, UI elements are per-client)
     pipeline_ui = PipelineUI(settings, dashboard_url, logfire_url)
