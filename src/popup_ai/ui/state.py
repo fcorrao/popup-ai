@@ -67,6 +67,7 @@ class UIState:
             name: StageState(name=name) for name in self.STAGES
         }
         self.pipeline_running = False
+        self.nerd_level: float = 0.0
         self._event_callbacks: list[Callable[[UIEvent], None]] = []
 
     def get_stage(self, name: str) -> StageState | None:

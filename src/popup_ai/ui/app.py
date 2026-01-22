@@ -12,6 +12,7 @@ from popup_ai.config import Settings
 from popup_ai.messages import UIEvent
 from popup_ai.ui.components.pipeline_bar import PipelineBar
 from popup_ai.ui.state import UIState
+from pydantic import BaseModel
 from popup_ai.ui.tabs import (
     AnnotatorTab,
     AudioIngestTab,
@@ -199,6 +200,13 @@ class PipelineUI:
                             event = self.ui_queue.get_nowait()
                             if isinstance(event, UIEvent):
                                 state.handle_event(event)
+
+                                # Nerd-o-meter logic: increment on display
+                                if event.event_type == "display":
+                                    global _NERD_LEVEL
+                                    async with _NERD_LOCK:
+                                        _NERD_LEVEL = min(_NERD_LEVEL + 0.5, 11.0)
+
                                 # Route to appropriate tab
                                 event_to_tab = {
                                     "chunk_produced": "audio_ingest",
@@ -264,6 +272,28 @@ class PipelineUI:
         except Exception as e:
             logger.exception("Failed to stop pipeline")
             ui.notify(f"Failed to stop: {e}", type="negative")
+
+
+# ---- Nerdometer API ----
+
+_NERD_LEVEL: float = 0.0
+_NERD_LOCK = asyncio.Lock()
+
+class NerdUpdate(BaseModel):
+    level: float
+
+@app.get("/api/nerd-level")
+async def get_nerd_level() -> dict[str, Any]:
+    """Get the current nerd level."""
+    return {"level": _NERD_LEVEL}
+
+@app.post("/api/nerd-level")
+async def set_nerd_level(update: NerdUpdate) -> dict[str, Any]:
+    """Set the nerd level."""
+    global _NERD_LEVEL
+    async with _NERD_LOCK:
+        _NERD_LEVEL = update.level
+    return {"level": _NERD_LEVEL}
 
 
 def run_app(settings: Settings) -> None:

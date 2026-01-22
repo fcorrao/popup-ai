@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Nerd-o-Meter Overlay</title>
+  <style>
+    /* 
+      The goal is a transparent overlay that fits the 
+      provided "nerd-o-meter.png" background asset.
+      
+      We'll center it on the screen for easy OBS capture.
+    */
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      /* OBS browser source transparency */
+      overflow: hidden;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+
+    #wrap {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+
+      /* The asset's natural dimensions or a scaled version. 
+         Let's assume a reasonable size for streaming (e.g. 800px wide). */
+      width: 800px;
+      height: 480px;
+      /* approximative aspect ratio of the image */
+
+      background: url('nerd-o-meter.png') no-repeat center center;
+      background-size: contain;
+    }
+
+    /* 
+       The "screen" area within the BG image where the needle lives.
+       These values are guesses and need tuning based on the actual PNG.
+       Assuming the screen is roughly 70% of the middle.
+    */
+    #screen-area {
+      position: absolute;
+      top: 18%;
+      left: 14%;
+      width: 72%;
+      height: 64%;
+      /* border: 1px solid red; /* debug alignment */
+      overflow: hidden;
+      /* clip the needle if it goes wild */
+    }
+
+    /* Effects Layers */
+    #glow {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle, rgba(255, 50, 50, 0.4) 0%, rgba(0, 0, 0, 0) 70%);
+      opacity: 0;
+      transition: opacity 300ms ease;
+      mix-blend-mode: screen;
+      pointer-events: none;
+    }
+
+    #smoke {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transition: opacity 250ms linear;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 45% 60%, rgba(200, 200, 200, 0.25), rgba(200, 200, 200, 0) 60%),
+        radial-gradient(circle at 55% 58%, rgba(220, 220, 220, 0.20), rgba(220, 220, 220, 0) 62%),
+        radial-gradient(circle at 50% 65%, rgba(230, 230, 230, 0.15), rgba(230, 230, 230, 0) 70%);
+      filter: blur(6px);
+      animation: smokeDrift 2.5s infinite ease-in-out;
+      mix-blend-mode: screen;
+    }
+
+    @keyframes smokeDrift {
+      0% {
+        transform: translate(0px, 0px);
+      }
+
+      50% {
+        transform: translate(4px, -3px);
+      }
+
+      100% {
+        transform: translate(0px, 0px);
+      }
+    }
+
+    .shake {
+      animation: shake 0.5s cubic-bezier(.36, .07, .19, .97) both infinite;
+    }
+
+    @keyframes shake {
+
+      10%,
+      90% {
+        transform: translate(-51%, -50%);
+      }
+
+      /* maintain centering -50% */
+      20%,
+      80% {
+        transform: translate(-49%, -50%);
+      }
+
+      30%,
+      50%,
+      70% {
+        transform: translate(-52%, -50%);
+      }
+
+      40%,
+      60% {
+        transform: translate(-48%, -50%);
+      }
+    }
+
+    /* SVG Gauge positioning */
+    svg#gauge {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .label {
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="wrap">
+    <!-- The screen area contains the dynamic gauge -->
+    <div id="screen-area">
+      <div id="glow"></div>
+      <div id="smoke"></div>
+
+      <svg id="gauge" viewBox="0 0 600 300">
+        <!-- 
+         ViewBox 0 0 600 300 is a generic aspect ratio for the inner screen.
+         We don't draw the "face" rect because the PNG provides the frame.
+         We just draw tick marks, text, and the needle.
+      -->
+
+        <!-- Tick Marks Arc -->
+        <path d="M 100 250 A 200 200 0 0 1 500 250" fill="none" stroke="#444" stroke-width="4" stroke-linecap="round" />
+
+        <!-- Redline Zone -->
+        <path d="M 400 250 A 200 200 0 0 1 500 250" fill="none" stroke="#a33" stroke-width="8" stroke-linecap="round"
+          opacity="0.8" />
+
+        <!-- Pivot Point -->
+        <circle cx="300" cy="250" r="10" fill="#999" />
+        <circle cx="300" cy="250" r="6" fill="#111" />
+
+        <!-- Needle Group -->
+        <g id="needleGroup" transform="rotate(-90 300 250)">
+          <path d="M 295 250 L 305 250 L 300 80 Z" fill="#f2f2f2" />
+          <path d="M 297 100 L 303 100 L 300 50 Z" fill="#ffcc66" /> <!-- tip -->
+        </g>
+
+        <!-- Digital Readout -->
+        <text id="readout" x="300" y="200" fill="#f2f2f2" font-size="40" text-anchor="middle" class="label">0.0</text>
+        <text x="300" y="225" fill="#888" font-size="12" text-anchor="middle" class="label">LEVEL</text>
+
+        <!-- Max Label -->
+        <text x="490" y="240" fill="#ff6666" font-size="14" text-anchor="middle" class="label">11</text>
+      </svg>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      // ---- Config ----
+      const API_URL = "/api/nerd-level";
+      const POLL_MS = 250;
+      const MIN_LEVEL = 0;
+      const MAX_LEVEL = 11;
+
+      // Angle mapping: -90 degrees (left) to +90 degrees (right)
+      const MIN_ANGLE = -90;
+      const MAX_ANGLE = 90;
+
+      const EASE = 0.08;
+      const BASE_QUIVER = 0.5;
+      const MAX_QUIVER = 3.0;
+      const QUIVER_SPEED = 0.1;
+
+      // ---- Doms ----
+      const wrap = document.getElementById("wrap");
+      const needle = document.getElementById("needleGroup");
+      const readout = document.getElementById("readout");
+      const glow = document.getElementById("glow");
+      const smoke = document.getElementById("smoke");
+
+      // ---- State ----
+      let targetLevel = 0;
+      let currentLevel = 0;
+
+      function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+
+      function levelToAngle(level) {
+        const t = (level - MIN_LEVEL) / (MAX_LEVEL - MIN_LEVEL);
+        return MIN_ANGLE + t * (MAX_ANGLE - MIN_ANGLE);
+      }
+
+      // Poll API
+      async function poll() {
+        try {
+          const r = await fetch(API_URL, { cache: "no-store" });
+          if (r.ok) {
+            const j = await r.json();
+            targetLevel = clamp(Number(j.level ?? 0), MIN_LEVEL, MAX_LEVEL);
+          }
+        } catch (e) { /* ignore */ }
+      }
+      setInterval(poll, POLL_MS);
+
+      // Animation Loop
+      let time = 0;
+      function tick() {
+        time += 1;
+        currentLevel += (targetLevel - currentLevel) * EASE;
+
+        // Quiver effect
+        const intensity = currentLevel / MAX_LEVEL;
+        // Increase amplitude at high levels
+        const amp = BASE_QUIVER + intensity * (MAX_QUIVER - BASE_QUIVER) * 1.5;
+
+        // Make speed increase with intensity (0.1 -> 0.8)
+        const currentSpeed = QUIVER_SPEED + (intensity * 0.7);
+
+        const wobble = Math.sin(time * currentSpeed) * amp + Math.sin(time * 0.5) * (amp * 0.5);
+
+        // Rotate needle
+        const baseAngle = levelToAngle(currentLevel);
+        const finalAngle = baseAngle + wobble;
+        needle.setAttribute("transform", `rotate(${finalAngle.toFixed(2)} 300 250)`);
+
+        // Update readout
+        readout.textContent = (Math.round(currentLevel * 10) / 10).toFixed(1);
+
+        // Effects
+        // Glow starts at 7, max at 11
+        const glowOpacity = clamp((currentLevel - 7) / 4, 0, 1);
+        glow.style.opacity = glowOpacity.toFixed(2);
+
+        // Smoke starts at 10.3
+        const smokeOpacity = clamp((currentLevel - 10.3) / 0.7, 0, 1);
+        smoke.style.opacity = smokeOpacity.toFixed(2);
+
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+
+    })();
+  </script>
+</body>
+
+</html>
