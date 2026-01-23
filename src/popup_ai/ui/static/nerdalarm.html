@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Nerd Alarm Overlay</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+    }
+
+    #alarm {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 90%;
+      max-height: 90%;
+      opacity: 0;
+      transition: opacity 150ms ease-out;
+      pointer-events: none;
+    }
+
+    /* Pulsating animation - fades between max opacity and fully transparent */
+    @keyframes pulse {
+      0% {
+        opacity: var(--max-opacity, 1);
+        transform: translate(-50%, -50%) scale(1);
+      }
+      50% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.98);
+      }
+      100% {
+        opacity: var(--max-opacity, 1);
+        transform: translate(-50%, -50%) scale(1);
+      }
+    }
+
+    #alarm.pulsing {
+      animation: pulse 1s ease-in-out infinite;
+    }
+  </style>
+</head>
+
+<body>
+  <img id="alarm" src="nerd-alarm.gif" alt="NERD ALARM" />
+
+  <script>
+    (() => {
+      const API_URL = "/api/nerd-level";
+      const POLL_MS = 250;
+
+      // Thresholds
+      const ALARM_START = 10;    // Start showing alarm
+      const ALARM_MAX = 11;      // Full opacity
+
+      const alarm = document.getElementById("alarm");
+
+      let targetLevel = 0;
+      let currentLevel = 0;
+      const EASE = 0.12;
+
+      function clamp(x, lo, hi) {
+        return Math.max(lo, Math.min(hi, x));
+      }
+
+      // Poll API
+      async function poll() {
+        try {
+          const r = await fetch(API_URL, { cache: "no-store" });
+          if (r.ok) {
+            const j = await r.json();
+            targetLevel = clamp(Number(j.level ?? 0), 0, ALARM_MAX);
+          }
+        } catch (e) { /* ignore */ }
+      }
+      setInterval(poll, POLL_MS);
+
+      // Animation Loop
+      function tick() {
+        // Smooth easing toward target
+        currentLevel += (targetLevel - currentLevel) * EASE;
+
+        // Calculate max opacity: 0 at level 10, 1.0 at level 11
+        let maxOpacity = 0;
+        if (currentLevel > ALARM_START) {
+          const progress = (currentLevel - ALARM_START) / (ALARM_MAX - ALARM_START);
+          maxOpacity = clamp(progress, 0, 1);
+        }
+
+        // Set the CSS variable for animation to use
+        alarm.style.setProperty('--max-opacity', maxOpacity.toFixed(3));
+
+        // Always pulsate when visible, hide when not
+        if (maxOpacity > 0.01) {
+          alarm.classList.add('pulsing');
+        } else {
+          alarm.classList.remove('pulsing');
+        }
+
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+
+    })();
+  </script>
+</body>
+
+</html>

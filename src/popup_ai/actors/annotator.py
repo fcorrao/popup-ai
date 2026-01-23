@@ -58,6 +58,19 @@ GOOD examples of terms to annotate:
 BAD examples (too common/obvious, don't annotate these):
 - "computer", "software", "website", "app", "code", "programming"
 
+IMPORTANT: Input comes from speech-to-text or OCR, so expect transcription errors:
+- Phonetic misspellings: "almond filter" → "Kalman filter", "cash" → "cache"
+- Homophones: "sequel" → "SQL", "jason" → "JSON"
+- Word boundaries: "react native" vs "React Native"
+
+Always output the CORRECT technical spelling of terms, not the transcription error.
+
+You have access to tools to help identify terms:
+- lookup_similar_term: Use when you suspect STT misspelled a technical term (e.g., "almond filter" might be "Kalman filter")
+- get_more_context: Use when the transcript is ambiguous and more context would help
+
+Limit tool usage to 1-2 calls per transcript - most transcripts won't need tools. Only call when genuinely uncertain.
+
 Guidelines:
 - Use metaphors and analogies to everyday objects when possible
 - Keep explanations terse - readable in under 5 seconds
@@ -111,6 +124,10 @@ class AnnotatorActor:
         # Format: (timestamp_ms, term_lower)
         self._recent_annotations: deque[tuple[int, str]] = deque()
         self._annotation_dedupe_window_ms = 60_000  # 60 seconds
+
+        # Context window: track recent transcripts for LLM context
+        self._recent_transcripts: deque[str] = deque()
+        self._context_window_chars = config.context_window_chars
 
         # Configure logfire in __init__ to avoid blocking async event loop
         ensure_logfire_configured()
@@ -309,8 +326,8 @@ class AnnotatorActor:
         return self._save_prompts(provider, model, system_prompt, prompt_template)
 
     def _init_agent(self) -> None:
-        """Initialize pydantic-ai agent for LLM calls."""
-        from pydantic_ai import Agent
+        """Initialize pydantic-ai agent for LLM calls with tools."""
+        from pydantic_ai import Agent, Tool
 
         model = self._create_model()
         if model is None:
@@ -322,12 +339,39 @@ class AnnotatorActor:
         self._current_system_prompt = prompts["system_prompt"]
         self._current_prompt_template = prompts["prompt_template"]
 
+        # Define tool functions that capture self via closure
+        def lookup_similar_term(term: str) -> str:
+            """Search cache for terms similar to the given term.
+
+            Use when you suspect a term might be misspelled due to STT errors.
+            Returns the correct term and explanation if found.
+            """
+            result = self._fuzzy_search_cache(term)
+            if result:
+                return f"Found: '{result['term']}' - {result['explanation']}"
+            return "No similar term found in cache."
+
+        def get_more_context(chars: int = 500) -> str:
+            """Get additional transcript history for context.
+
+            Use when the current transcript is ambiguous and more surrounding
+            text would help clarify the meaning.
+            """
+            return self._get_extended_context(min(chars, 1000))
+
+        # Create tools list
+        tools = [
+            Tool(lookup_similar_term, takes_ctx=False),
+            Tool(get_more_context, takes_ctx=False),
+        ]
+
         self._agent = Agent(
             model,
             output_type=AnnotationResponse,
             system_prompt=self._current_system_prompt,
+            tools=tools,
         )
-        self._logger.info(f"Agent initialized for {self.config.provider}:{self.config.model}")
+        self._logger.info(f"Agent initialized for {self.config.provider}:{self.config.model} with 2 tools")
 
     def _create_model(self) -> Any:
         """Create model instance based on provider config."""
@@ -434,11 +478,13 @@ class AnnotatorActor:
         """Process a transcript and generate annotations."""
         text = transcript.text.strip()
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+        source = transcript.source  # "audio" or "ocr"
 
         # Publish transcript_received event for UI
         self._publish_ui_event("transcript_received", {
             "text": text[:100],
             "text_hash": text_hash,
+            "source": source,
         })
 
         # Check cache first
@@ -450,11 +496,16 @@ class AnnotatorActor:
             for term, explanation in cached:
                 # Use default complexity 5 for cached items (nerd-o-meter resets each stream)
                 await self._emit_annotation(term, explanation, complexity=5, cache_hit=True)
+            # Update context window even for cache hits
+            self._update_context_window(text)
             return
 
-        # Call LLM
-        annotations = await self._call_llm(text)
+        # Call LLM with source type
+        annotations = await self._call_llm(text, source=source)
         self._llm_calls += 1
+
+        # Update context window after processing
+        self._update_context_window(text)
 
         # Cache and emit results
         for term, explanation, complexity in annotations:
@@ -504,8 +555,65 @@ class AnnotatorActor:
         row = cursor.fetchone()
         return row[0] if row else None
 
-    async def _call_llm(self, text: str) -> list[tuple[str, str, int]]:
+    # ========== Context Window Methods ==========
+
+    def _get_context_window(self) -> str:
+        """Get recent transcript context as a single string."""
+        context = " ".join(self._recent_transcripts)
+        # Trim to max chars, keeping recent text
+        if len(context) > self._context_window_chars:
+            context = "..." + context[-self._context_window_chars:]
+        return context
+
+    def _get_extended_context(self, chars: int = 500) -> str:
+        """Get extended transcript context (for tool calls)."""
+        context = " ".join(self._recent_transcripts)
+        max_chars = min(chars, 1000)  # Cap at 1000 chars
+        if len(context) > max_chars:
+            context = "..." + context[-max_chars:]
+        return context if context else "(no additional context available)"
+
+    def _update_context_window(self, text: str) -> None:
+        """Add text to context window and prune old entries."""
+        self._recent_transcripts.append(text)
+        # Keep only enough to fill context window (with some buffer)
+        while sum(len(t) for t in self._recent_transcripts) > self._context_window_chars * 1.5:
+            self._recent_transcripts.popleft()
+
+    # ========== Fuzzy Search Methods ==========
+
+    def _fuzzy_search_cache(self, term: str) -> dict | None:
+        """Fuzzy search cache for similar terms (for STT correction)."""
+        if not self._db_conn:
+            return None
+
+        cursor = self._db_conn.execute(
+            "SELECT term, explanation FROM annotations ORDER BY created_at DESC LIMIT 100"
+        )
+
+        term_lower = term.lower()
+        for row in cursor:
+            cached_term = row[0].lower()
+            if self._is_similar(term_lower, cached_term):
+                return {"term": row[0], "explanation": row[1]}
+        return None
+
+    def _is_similar(self, a: str, b: str) -> bool:
+        """Check if two terms are phonetically/typographically similar."""
+        # Direct containment
+        if a in b or b in a:
+            return True
+        # Character overlap similarity
+        common = set(a) & set(b)
+        similarity = len(common) / max(len(set(a)), len(set(b)))
+        return similarity > 0.6
+
+    async def _call_llm(self, text: str, source: str = "audio") -> list[tuple[str, str, int]]:
         """Call LLM to extract annotations using pydantic-ai agent.
+
+        Args:
+            text: The transcript text to process.
+            source: Source type ("audio" or "ocr") for context.
 
         Returns list of (term, explanation, complexity) tuples.
         """
@@ -513,9 +621,16 @@ class AnnotatorActor:
             # Mock mode - no API key configured
             return []
 
+        # Get context window for prompt
+        context = self._get_context_window()
+
         # Use current prompt template (from DB or config default)
         prompt_template = getattr(self, '_current_prompt_template', None) or self.config.prompt_template
-        prompt = prompt_template.format(text=text)
+        prompt = prompt_template.format(
+            text=text,
+            source=source,
+            context=context or "(no prior context)",
+        )
 
         # Retry once with agent reinitialization on connection errors
         for attempt in range(2):

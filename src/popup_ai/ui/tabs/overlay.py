@@ -1,5 +1,6 @@
 """Overlay tab with annotation testing and browser panel status."""
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -13,7 +14,6 @@ from popup_ai.ui.components.data_viewer import (
 )
 from popup_ai.ui.components.status_card import StatusCard
 from popup_ai.ui.state import UIState
-from popup_ai.ui import app as app_module  # For nerd level access
 
 
 class OverlayTab:
@@ -42,6 +42,7 @@ class OverlayTab:
         self._nerd_level_label: ui.label | None = None
         self._nerd_progress: ui.linear_progress | None = None
         self._nerd_internal_label: ui.label | None = None
+        self._nerd_slider: ui.slider | None = None
 
     def build(self) -> ui.column:
         """Build and return the overlay tab content."""
@@ -198,17 +199,36 @@ class OverlayTab:
                         self._nerd_level_label = ui.label("Level: 0.0").classes("text-h6")
                         self._nerd_internal_label = ui.label("(internal: 0.0)").classes("text-caption text-grey")
                     self._nerd_progress = ui.linear_progress(value=0, show_value=False).classes("w-full")
-                    with ui.row().classes("gap-2"):
+
+                    # Slider for direct control
+                    ui.label("Set Level:").classes("text-caption text-grey mt-2")
+                    self._nerd_slider = ui.slider(
+                        min=0, max=13, step=0.1, value=0
+                    ).classes("w-full").on(
+                        "update:model-value",
+                        lambda e: asyncio.create_task(self._handle_slider_change(e.args))
+                    )
+
+                    # Quick preset buttons
+                    with ui.row().classes("gap-2 flex-wrap"):
+                        ui.button("0", on_click=lambda: self._set_nerd_level(0)).props("outline dense size=sm")
+                        ui.button("5", on_click=lambda: self._set_nerd_level(5)).props("outline dense size=sm")
+                        ui.button("7", on_click=lambda: self._set_nerd_level(7)).props("outline dense size=sm")
+                        ui.button("10", on_click=lambda: self._set_nerd_level(10)).props("outline dense size=sm")
+                        ui.button("10.5", on_click=lambda: self._set_nerd_level(10.5)).props("outline dense size=sm color=orange")
+                        ui.button("10.8", on_click=lambda: self._set_nerd_level(10.8)).props("outline dense size=sm color=deep-orange")
+                        ui.button("11", on_click=lambda: self._set_nerd_level(11)).props("dense size=sm color=red")
+                        ui.button("13 (max)", on_click=lambda: self._set_nerd_level(13)).props("dense size=sm color=red-10")
+
+                    # Nerd Alarm URL
+                    nerdalarm_url = f"http://localhost:{self._settings.pipeline.ui_port}/static/nerdalarm.html"
+                    with ui.row().classes("items-center gap-2 w-full mt-2"):
+                        ui.label("Nerd Alarm:").classes("w-20 text-caption")
+                        ui.input(value=nerdalarm_url).classes("flex-1").props("dense readonly")
                         ui.button(
-                            "Reset to 0",
-                            on_click=self._handle_reset_nerd_level,
-                            icon="restart_alt",
-                        ).props("outline dense")
-                        ui.button(
-                            "Set to 11",
-                            on_click=self._handle_max_nerd_level,
-                            icon="whatshot",
-                        ).props("outline dense")
+                            icon="content_copy",
+                            on_click=lambda u=nerdalarm_url: ui.clipboard.write(u)
+                        ).props("flat dense")
 
             # Input/Output viewers side by side
             with ui.row().classes("w-full gap-4"):
@@ -321,6 +341,7 @@ class OverlayTab:
 
     async def _handle_reset_nerd_level(self) -> None:
         """Reset nerd level to 0."""
+        from popup_ai.ui import app as app_module
         async with app_module._NERD_LOCK:
             app_module._NERD_LEVEL = 0.0
         ui.notify("Nerd level reset to 0", type="positive")
@@ -328,13 +349,36 @@ class OverlayTab:
 
     async def _handle_max_nerd_level(self) -> None:
         """Set nerd level to max (internal 13)."""
+        from popup_ai.ui import app as app_module
         async with app_module._NERD_LOCK:
             app_module._NERD_LEVEL = app_module.NERD_MAX_INTERNAL
         ui.notify("Nerd level set to max", type="positive")
         self._update_nerd_display()
 
+    async def _handle_slider_change(self, value: float) -> None:
+        """Handle slider value change."""
+        from popup_ai.ui import app as app_module
+        async with app_module._NERD_LOCK:
+            app_module._NERD_LEVEL = value
+        self._update_nerd_display()
+
+    def _set_nerd_level(self, level: float) -> None:
+        """Set nerd level to a specific value (sync wrapper)."""
+        asyncio.create_task(self._async_set_nerd_level(level))
+
+    async def _async_set_nerd_level(self, level: float) -> None:
+        """Set nerd level to a specific value."""
+        from popup_ai.ui import app as app_module
+        async with app_module._NERD_LOCK:
+            app_module._NERD_LEVEL = level
+        # Update slider to match (no notify - called from background task)
+        if self._nerd_slider:
+            self._nerd_slider.set_value(level)
+        self._update_nerd_display()
+
     def _update_nerd_display(self) -> None:
         """Update the nerd-o-meter display elements."""
+        from popup_ai.ui import app as app_module
         internal_level = app_module._NERD_LEVEL
         display_level = min(internal_level, 11.0)
 
@@ -345,6 +389,7 @@ class OverlayTab:
         if self._nerd_progress:
             # Progress bar shows 0-11 range
             self._nerd_progress.set_value(display_level / 11.0)
+        # Don't sync slider here to avoid feedback loops - slider updates display, not vice versa
 
     def handle_event(self, event: UIEvent) -> None:
         """Handle a UI event for this tab."""

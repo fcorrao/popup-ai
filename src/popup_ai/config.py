@@ -99,6 +99,19 @@ GOOD examples of terms to annotate:
 BAD examples (too common/obvious, don't annotate these):
 - "computer", "software", "website", "app", "code", "programming"
 
+IMPORTANT: Input comes from speech-to-text or OCR, so expect transcription errors:
+- Phonetic misspellings: "almond filter" → "Kalman filter", "cash" → "cache"
+- Homophones: "sequel" → "SQL", "jason" → "JSON"
+- Word boundaries: "react native" vs "React Native"
+
+Always output the CORRECT technical spelling of terms, not the transcription error.
+
+You have access to tools to help identify terms:
+- lookup_similar_term: Use when you suspect STT misspelled a technical term (e.g., "almond filter" might be "Kalman filter")
+- get_more_context: Use when the transcript is ambiguous and more context would help
+
+Limit tool usage to 1-2 calls per transcript - most transcripts won't need tools. Only call when genuinely uncertain.
+
 Guidelines:
 - Use metaphors and analogies to everyday objects when possible
 - Keep explanations terse - readable in under 5 seconds
@@ -107,8 +120,12 @@ Guidelines:
         description="System prompt for the LLM",
     )
     prompt_template: str = Field(
-        default="Extract key technical terms or concepts from this transcript: {text}",
+        default="Source: {source}\n\nRecent context:\n{context}\n\nCurrent transcript:\n{text}\n\nExtract key technical terms from the current transcript. Use context for understanding but only annotate terms from the current transcript.",
         description="Prompt template for annotation",
+    )
+    context_window_chars: int = Field(
+        default=500,
+        description="Max characters of recent transcript context to include",
     )
 
 
