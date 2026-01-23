@@ -12,7 +12,7 @@ from typing import Any
 
 import logfire
 import ray
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ray.util.queue import Queue
 
 from popup_ai.config import AnnotatorConfig
@@ -26,6 +26,12 @@ class AnnotationResult(BaseModel):
     """A single annotation result from the LLM."""
     term: str
     explanation: str
+    complexity: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Complexity score 1-10: 1=basic concept, 10=PhD-level jargon"
+    )
 
 
 class AnnotationResponse(BaseModel):
@@ -56,7 +62,12 @@ Guidelines:
 - Use metaphors and analogies to everyday objects when possible
 - Keep explanations terse - readable in under 5 seconds
 - Return 1-3 annotations per transcript depending on content density
-- Return an empty annotations list if no terms warrant explanation"""
+- Return an empty annotations list if no terms warrant explanation
+
+Complexity scoring (1-10):
+- 1-3: Basic concepts most programmers know (API, database, server, variable, function)
+- 4-6: Intermediate concepts (dependency injection, middleware, ORM, closure, recursion)
+- 7-10: Advanced/specialized (Kalman filter, Byzantine fault tolerance, lambda calculus, monads)"""
 
 
 @ray.remote
@@ -437,7 +448,8 @@ class AnnotatorActor:
             if metrics := get_metrics():
                 metrics["llm_cache_hits"].add(1)
             for term, explanation in cached:
-                await self._emit_annotation(term, explanation, cache_hit=True)
+                # Use default complexity 5 for cached items (nerd-o-meter resets each stream)
+                await self._emit_annotation(term, explanation, complexity=5, cache_hit=True)
             return
 
         # Call LLM
@@ -445,9 +457,9 @@ class AnnotatorActor:
         self._llm_calls += 1
 
         # Cache and emit results
-        for term, explanation in annotations:
+        for term, explanation, complexity in annotations:
             self._cache_annotation(text_hash, term, explanation)
-            await self._emit_annotation(term, explanation, cache_hit=False)
+            await self._emit_annotation(term, explanation, complexity=complexity, cache_hit=False)
 
     def _get_cached(self, text_hash: str) -> list[tuple[str, str]] | None:
         """Get cached annotations for text hash."""
@@ -492,8 +504,11 @@ class AnnotatorActor:
         row = cursor.fetchone()
         return row[0] if row else None
 
-    async def _call_llm(self, text: str) -> list[tuple[str, str]]:
-        """Call LLM to extract annotations using pydantic-ai agent."""
+    async def _call_llm(self, text: str) -> list[tuple[str, str, int]]:
+        """Call LLM to extract annotations using pydantic-ai agent.
+
+        Returns list of (term, explanation, complexity) tuples.
+        """
         if not self._agent:
             # Mock mode - no API key configured
             return []
@@ -514,8 +529,8 @@ class AnnotatorActor:
                     metrics["llm_calls"].add(1)
                     metrics["llm_latency"].record(latency_ms)
 
-                # Extract annotations from structured response
-                annotations = [(a.term, a.explanation) for a in result.output.annotations]
+                # Extract annotations from structured response (including complexity)
+                annotations = [(a.term, a.explanation, a.complexity) for a in result.output.annotations]
                 return annotations
             except Exception as e:
                 error_msg = str(e).lower()
@@ -545,7 +560,7 @@ class AnnotatorActor:
         return False
 
     async def _emit_annotation(
-        self, term: str, explanation: str, cache_hit: bool = False
+        self, term: str, explanation: str, complexity: int = 5, cache_hit: bool = False
     ) -> None:
         """Emit an annotation to the output queue."""
         # Check for recently emitted duplicates (term-level dedupe)
@@ -562,6 +577,7 @@ class AnnotatorActor:
         annotation = Annotation(
             term=term,
             explanation=explanation,
+            complexity=complexity,
             display_duration_ms=self.config.cache_enabled and 5000 or 5000,
             slot=self._slot_counter,
             timestamp_ms=int(time.time() * 1000),
@@ -573,6 +589,7 @@ class AnnotatorActor:
             self._publish_ui_event("annotation", {
                 "term": term,
                 "explanation": explanation,
+                "complexity": complexity,
                 "cache_hit": cache_hit,
                 "slot": self._slot_counter,
             })

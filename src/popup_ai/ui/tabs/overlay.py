@@ -13,6 +13,7 @@ from popup_ai.ui.components.data_viewer import (
 )
 from popup_ai.ui.components.status_card import StatusCard
 from popup_ai.ui.state import UIState
+from popup_ai.ui import app as app_module  # For nerd level access
 
 
 class OverlayTab:
@@ -37,6 +38,10 @@ class OverlayTab:
         # Panel status labels
         self._panel_1_count: ui.label | None = None
         self._panel_2_count: ui.label | None = None
+        # Nerd-o-meter display
+        self._nerd_level_label: ui.label | None = None
+        self._nerd_progress: ui.linear_progress | None = None
+        self._nerd_internal_label: ui.label | None = None
 
     def build(self) -> ui.column:
         """Build and return the overlay tab content."""
@@ -85,6 +90,16 @@ class OverlayTab:
                     ui.button(
                         icon="content_copy",
                         on_click=lambda u=panel2_url: ui.clipboard.write(u)
+                    ).props("flat dense")
+
+                # Nerdometer URL
+                nerdometer_url = f"http://localhost:{self._settings.pipeline.ui_port}/static/nerdometer.html"
+                with ui.row().classes("items-center gap-2 w-full"):
+                    ui.label("Nerdometer:").classes("w-16 font-medium")
+                    ui.input(value=nerdometer_url).classes("flex-1").props("dense readonly")
+                    ui.button(
+                        icon="content_copy",
+                        on_click=lambda u=nerdometer_url: ui.clipboard.write(u)
                     ).props("flat dense")
 
                 # Mode info
@@ -174,6 +189,26 @@ class OverlayTab:
                         on_click=self._handle_clear_panels,
                         icon="restart_alt",
                     ).props("outline")
+
+            # Nerd-o-meter Status
+            with ui.card().classes("w-full"):
+                ui.label("Nerd-o-meter Status").classes("font-medium")
+                with ui.column().classes("gap-2 w-full"):
+                    with ui.row().classes("items-center gap-4"):
+                        self._nerd_level_label = ui.label("Level: 0.0").classes("text-h6")
+                        self._nerd_internal_label = ui.label("(internal: 0.0)").classes("text-caption text-grey")
+                    self._nerd_progress = ui.linear_progress(value=0, show_value=False).classes("w-full")
+                    with ui.row().classes("gap-2"):
+                        ui.button(
+                            "Reset to 0",
+                            on_click=self._handle_reset_nerd_level,
+                            icon="restart_alt",
+                        ).props("outline dense")
+                        ui.button(
+                            "Set to 11",
+                            on_click=self._handle_max_nerd_level,
+                            icon="whatshot",
+                        ).props("outline dense")
 
             # Input/Output viewers side by side
             with ui.row().classes("w-full gap-4"):
@@ -284,6 +319,33 @@ class OverlayTab:
         except Exception as ex:
             ui.notify(f"Failed to reset panels: {ex}", type="negative")
 
+    async def _handle_reset_nerd_level(self) -> None:
+        """Reset nerd level to 0."""
+        async with app_module._NERD_LOCK:
+            app_module._NERD_LEVEL = 0.0
+        ui.notify("Nerd level reset to 0", type="positive")
+        self._update_nerd_display()
+
+    async def _handle_max_nerd_level(self) -> None:
+        """Set nerd level to max (internal 13)."""
+        async with app_module._NERD_LOCK:
+            app_module._NERD_LEVEL = app_module.NERD_MAX_INTERNAL
+        ui.notify("Nerd level set to max", type="positive")
+        self._update_nerd_display()
+
+    def _update_nerd_display(self) -> None:
+        """Update the nerd-o-meter display elements."""
+        internal_level = app_module._NERD_LEVEL
+        display_level = min(internal_level, 11.0)
+
+        if self._nerd_level_label:
+            self._nerd_level_label.set_text(f"Level: {display_level:.1f}")
+        if self._nerd_internal_label:
+            self._nerd_internal_label.set_text(f"(internal: {internal_level:.1f})")
+        if self._nerd_progress:
+            # Progress bar shows 0-11 range
+            self._nerd_progress.set_value(display_level / 11.0)
+
     def handle_event(self, event: UIEvent) -> None:
         """Handle a UI event for this tab."""
         if event.event_type == "annotation_received" and self._input_viewer:
@@ -311,3 +373,6 @@ class OverlayTab:
                     self._panel_1_count.set_text(f"Panel 1: {panel_1} entries")
                 if self._panel_2_count:
                     self._panel_2_count.set_text(f"Panel 2: {panel_2} entries")
+
+        # Always update nerd-o-meter (doesn't depend on stage)
+        self._update_nerd_display()

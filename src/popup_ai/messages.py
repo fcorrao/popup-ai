@@ -66,6 +66,7 @@ class Annotation(BaseModel):
 
     term: str
     explanation: str
+    complexity: int = Field(default=5, ge=1, le=10)
     display_duration_ms: int = 5000
     slot: int = Field(ge=1, le=4, default=1)
     timestamp_ms: int = 0

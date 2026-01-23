@@ -339,6 +339,7 @@ class OverlayActor:
             "panel": panel,
             "term": annotation.term,
             "explanation": annotation.explanation,
+            "complexity": annotation.complexity,
             "broadcast_ok": broadcast_ok,
         })
 
